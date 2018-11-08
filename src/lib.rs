@@ -21,3 +21,27 @@ pub mod serialize;
 pub mod udp;
 
 use portus::Result;
+
+pub struct Runtime {
+    // netlink socket
+    nlsk: netlink::Socket<ipc::Blocking>,
+    // UDP socket
+    udpsk: udp::Socket,
+}
+
+impl Runtime {
+    pub fn new() -> Self {
+        unimplemented!()
+    }
+}
+
+impl minion::Cancellable for Runtime {
+    type Error = portus::Error;
+
+    fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
+        // read from netlink socket?
+        // read from udp socket?
+
+        Ok(minion::LoopState::Continue)
+    }
+}
