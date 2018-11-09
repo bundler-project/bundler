@@ -17,6 +17,7 @@ mod libccp;
 
 use portus::ipc;
 use portus::ipc::netlink;
+pub mod serialize;
 pub mod udp;
 
 use portus::Result;

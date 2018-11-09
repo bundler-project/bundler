@@ -5,6 +5,7 @@ authors = ["Akshay Narayan <akshayn@mit.edu>"]
 edition = "2018"
 
 [dependencies]
+bytes = "0.4.5"
 minion = "0.1.0"
 portus = "^0.4"
 failure = "0.1"
