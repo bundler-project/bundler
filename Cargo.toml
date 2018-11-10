@@ -6,9 +6,12 @@ edition = "2018"
 
 [dependencies]
 bytes = "0.4.5"
+crossbeam = "0.5"
 minion = "0.1.0"
 portus = "^0.4"
 failure = "0.1"
+fnv = "1"
+time = "0.1"
 
 [build-dependencies]
 bindgen = "0.40.0"
