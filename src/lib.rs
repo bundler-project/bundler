@@ -21,12 +21,12 @@ pub mod udp;
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-mod libccp;
+mod ccp;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-mod libnl;
+mod nl;
 
 pub mod qdisc;
 use self::qdisc::*;

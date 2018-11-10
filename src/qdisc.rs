@@ -1,6 +1,6 @@
 use std;
 
-use super::libnl::*;
+use super::nl::*;
 
 pub struct Qdisc {
     sock: *mut nl_sock,
