@@ -6,13 +6,12 @@ use super::Result;
 
 pub struct Socket {
     sk: UdpSocket,
-    dest: String,
 }
 
 impl Socket {
-    pub fn new(port: u16, dest: String) -> Result<Self> {
+    pub fn new(port: u16) -> Result<Self> {
         let sk = UdpSocket::bind(("127.0.0.1", port))?;
-        Ok(Socket { sk, dest })
+        Ok(Socket { sk })
     }
 }
 
@@ -21,11 +20,8 @@ impl ipc::Ipc for Socket {
         String::from("udp")
     }
 
-    fn send(&self, msg: &[u8]) -> Result<()> {
-        self.sk
-            .send_to(msg, self.dest.clone())
-            .map(|_| ())
-            .map_err(Error::from)
+    fn send(&self, _msg: &[u8]) -> Result<()> {
+        unimplemented!()
     }
 
     fn recv(&self, msg: &mut [u8]) -> Result<usize> {
