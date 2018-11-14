@@ -6,11 +6,10 @@ use bytes::{ByteOrder, LittleEndian};
 /// RTT.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutBoxFeedbackMsg {
-    bundle_id: u32,
-    epoch_bytes: u32,
-    marked_packet_hash: u32,
-    recv_time: u64,
-    epoch_time: u64,
+    pub bundle_id: u32,
+    pub epoch_bytes: u32,
+    pub marked_packet_hash: u32,
+    pub recv_time: u64,
 }
 
 impl OutBoxFeedbackMsg {
@@ -20,7 +19,6 @@ impl OutBoxFeedbackMsg {
         LittleEndian::write_u32(&mut buf[4..8], self.epoch_bytes);
         LittleEndian::write_u32(&mut buf[8..12], self.marked_packet_hash);
         LittleEndian::write_u64(&mut buf[12..20], self.recv_time);
-        LittleEndian::write_u64(&mut buf[20..28], self.epoch_time);
         buf
     }
 
@@ -30,7 +28,6 @@ impl OutBoxFeedbackMsg {
             epoch_bytes: LittleEndian::read_u32(&buf[4..8]),
             marked_packet_hash: LittleEndian::read_u32(&buf[8..12]),
             recv_time: LittleEndian::read_u64(&buf[12..20]),
-            epoch_time: LittleEndian::read_u64(&buf[20..28]),
         }
     }
 }
@@ -38,10 +35,10 @@ impl OutBoxFeedbackMsg {
 /// Netlink feedback from in-box qdisc.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QDiscFeedbackMsg {
-    bundle_id: u32,
-    epoch_bytes: u32,
-    marked_packet_hash: u32,
-    epoch_time: u64,
+    pub bundle_id: u32,
+    pub epoch_bytes: u32,
+    pub marked_packet_hash: u32,
+    pub epoch_time: u64,
 }
 
 impl QDiscFeedbackMsg {
@@ -75,7 +72,6 @@ mod tests {
             epoch_bytes: 0xe,
             marked_packet_hash: 0x3fff_ffff,
             recv_time: 0xf0f0_f0f0,
-            epoch_time: 0x3030_3030,
         };
 
         let buf = m.as_bytes();
