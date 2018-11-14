@@ -6,11 +6,13 @@ edition = "2018"
 
 [dependencies]
 bytes = "0.4.5"
+clap = "2.32"
 crossbeam = "0.5"
-minion = "0.1.0"
-portus = "^0.4"
 failure = "0.1"
 fnv = "1"
+minion = "0.1.0"
+pcap = "0.7"
+portus = "^0.4"
 time = "0.1"
 
 [build-dependencies]
