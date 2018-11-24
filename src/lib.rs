@@ -50,7 +50,7 @@ impl NlMsgReader {
         nl: netlink::Socket<ipc::Blocking>,
     ) -> (Self, crossbeam::Receiver<QDiscFeedbackMsg>) {
         let (send, recv) = crossbeam::unbounded();
-        let s = NlMsgReader(nl, vec![0u8; 20], send);
+        let s = NlMsgReader(nl, vec![0u8; 100], send);
         (s, recv)
     }
 }
@@ -59,7 +59,7 @@ impl Cancellable for NlMsgReader {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
-        self.0.recv(&mut self.1[0..20])?;
+        self.0.recv(&mut self.1[0..100])?;
         let m = QDiscFeedbackMsg::from_slice(&self.1[0..20]);
         self.2.send(m)?;
         Ok(minion::LoopState::Continue)
@@ -87,12 +87,30 @@ impl Cancellable for UdpMsgReader {
     }
 }
 
-struct UnixMsgReader(UnixDatagram, Vec<u8>);
+struct UnixMsgReader(UnixDatagram, Vec<u8>, crossbeam::Sender<()>, u32);
 
 impl UnixMsgReader {
-    fn make() -> Self {
-        let unix = UnixDatagram::bind("/tmp/ccp/0/out").unwrap();
-        UnixMsgReader(unix, vec![0u8; 1024])
+    fn make() -> (Self, crossbeam::Receiver<()>) {
+        let addr = "/tmp/ccp/0/out";
+
+        match std::fs::create_dir_all("/tmp/ccp/0").err() {
+            Some(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Some(e) => Err(e),
+            None => Ok(())
+        }.unwrap();
+
+        match std::fs::remove_file(&addr).err() {
+            Some(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Some(e) => Err(e),
+            None => Ok(())
+        }.unwrap();
+
+        let sock = UnixDatagram::bind(addr).unwrap();
+
+        let (send, recv) = crossbeam::bounded(0);
+
+        let s = UnixMsgReader(sock, vec![0u8; 1024], send, 0);
+        (s, recv)
     }
 }
 
@@ -104,9 +122,16 @@ impl Cancellable for UnixMsgReader {
 
         // cast the vec in self to a *mut c_char
         let buf = self.1.as_mut_ptr() as *mut ::std::os::raw::c_char;
+        eprintln!("got {} bytes from portus!", bytes_read);
         let ok = unsafe { ccp::ccp_read_msg(buf, bytes_read as i32) };
         if ok < 0 {
             println!("error in ccp_read_msg");
+        }
+
+        self.3 += 1;
+        if self.3 == 1 {
+            eprintln!("alg is ready");
+            self.2.send(())?;
         }
 
         Ok(minion::LoopState::Continue)
@@ -153,7 +178,25 @@ extern "C" fn bundler_send_msg(
     let buf = unsafe { slice::from_raw_parts(msg as *mut u8, msg_size as usize) };
 
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe { (*dp).sk.send_to(buf, "/tmp/ccp/0/in").unwrap() };
+    unsafe { 
+        match (*dp).sk.send_to(buf, "/tmp/ccp/0/in") {
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound || e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                if (*dp).connected {
+                    eprintln!("warn: unix socket does not exist...");
+                }
+                (*dp).connected = false;
+                Ok(())
+            }
+            Err(e) => Err(e),
+            Ok(_) => {
+                if !(*dp).connected {
+                    eprintln!("info: unix socket connected!");
+                }
+                (*dp).connected = true;
+                Ok(())
+            }
+        }.unwrap();
+    };
     return 0;
 }
 
@@ -175,12 +218,14 @@ pub struct Runtime {
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     outbox_recv_handle: minion::Handle<portus::Error>,
     portus_reader_handle: minion::Handle<portus::Error>,
+    alg_ready: crossbeam::Receiver<()>,
     flow_state: BundleFlowState,
 }
 
 struct DatapathImpl {
     qdisc: Qdisc, // qdisc handle
     sk: UnixDatagram,
+    connected: bool,
 }
 
 #[derive(Default)]
@@ -204,13 +249,13 @@ impl Runtime {
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
         let outbox_recv_handle = outbox_reader.spawn();
 
-        let portus_reader = UnixMsgReader::make();
+        let (portus_reader, alg_ready) = UnixMsgReader::make();
         let portus_reader_handle = portus_reader.spawn();
 
         // TODO For now assumes root qdisc on the 10gp1 interface, but this
         // should be configurable  or we should add a deterministic way to
         // discover it correctly.
-        let qdisc = Qdisc::get(String::from("10gp1"), (1, 0));
+        let qdisc = Qdisc::get(String::from("10gp1"), (1, 8001));
 
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
@@ -218,6 +263,7 @@ impl Runtime {
         let dpi = DatapathImpl {
             sk: portus_sk,
             qdisc,
+            connected: true,
         };
 
         let dpi = Box::new(dpi);
@@ -239,12 +285,16 @@ impl Runtime {
             return None;
         }
 
+        // Wait for algorithm to finish installing datapath programs
+        alg_ready.recv().unwrap();
+        eprintln!("starting new flow");
+
         // this is a hack, we are pretending there is only one bundle/flow
         let mut dp_info = ccp::ccp_datapath_info {
             init_cwnd: 10,
             mss: 1500,
             src_ip: 0,
-            src_port: 0,
+            src_port: 42,
             dst_ip: 0,
             dst_port: 0,
             congAlg: [0i8; 64],
@@ -263,6 +313,7 @@ impl Runtime {
             outbox_recv,
             outbox_recv_handle,
             portus_reader_handle,
+            alg_ready,
             flow_state: fs,
         })
     }
@@ -275,6 +326,7 @@ impl Cancellable for Runtime {
         select!{
             recv(self.qdisc_recv) -> msg => {
                 if let Ok(msg) = msg {
+                    println!("got msg from qdisc! {:#?}", msg);
                     // remember the marked packet's send time
                     // so we can get its RTT later
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time);
@@ -288,6 +340,7 @@ impl Cancellable for Runtime {
             },
             recv(self.outbox_recv) -> msg => {
                 if let Ok(msg) = msg {
+                    println!("got msg from outbox! {:#?}", msg);
                     // check packet marking
                     if let Some(pkt_timestamp) = self.flow_state.marked_packets.get(&msg.marked_packet_hash) {
                         self.flow_state.rtt_estimate = time::precise_time_ns() - pkt_timestamp;

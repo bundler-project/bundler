@@ -10,7 +10,7 @@ pub struct Socket {
 
 impl Socket {
     pub fn new(port: u16) -> Result<Self> {
-        let sk = UdpSocket::bind(("127.0.0.1", port))?;
+        let sk = UdpSocket::bind(("0.0.0.0", port))?;
         Ok(Socket { sk })
     }
 }
