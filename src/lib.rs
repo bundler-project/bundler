@@ -11,6 +11,7 @@ extern crate crossbeam;
 extern crate failure;
 extern crate minion;
 extern crate portus;
+extern crate slog;
 
 use crossbeam::select;
 use minion::Cancellable;
@@ -18,6 +19,7 @@ use portus::ipc;
 use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use portus::Result;
+use slog::info;
 use std::os::unix::net::UnixDatagram;
 
 pub mod serialize;
@@ -96,14 +98,16 @@ impl UnixMsgReader {
         match std::fs::create_dir_all("/tmp/ccp/0").err() {
             Some(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
             Some(e) => Err(e),
-            None => Ok(())
-        }.unwrap();
+            None => Ok(()),
+        }
+        .unwrap();
 
         match std::fs::remove_file(&addr).err() {
             Some(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Some(e) => Err(e),
-            None => Ok(())
-        }.unwrap();
+            None => Ok(()),
+        }
+        .unwrap();
 
         let sock = UnixDatagram::bind(addr).unwrap();
 
@@ -122,7 +126,6 @@ impl Cancellable for UnixMsgReader {
 
         // cast the vec in self to a *mut c_char
         let buf = self.1.as_mut_ptr() as *mut ::std::os::raw::c_char;
-        eprintln!("got {} bytes from portus!", bytes_read);
         let ok = unsafe { ccp::ccp_read_msg(buf, bytes_read as i32) };
         if ok < 0 {
             println!("error in ccp_read_msg");
@@ -130,7 +133,6 @@ impl Cancellable for UnixMsgReader {
 
         self.3 += 1;
         if self.3 == 1 {
-            eprintln!("alg is ready");
             self.2.send(())?;
         }
 
@@ -178,9 +180,12 @@ extern "C" fn bundler_send_msg(
     let buf = unsafe { slice::from_raw_parts(msg as *mut u8, msg_size as usize) };
 
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe { 
+    unsafe {
         match (*dp).sk.send_to(buf, "/tmp/ccp/0/in") {
-            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound || e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
                 if (*dp).connected {
                     eprintln!("warn: unix socket does not exist...");
                 }
@@ -195,7 +200,8 @@ extern "C" fn bundler_send_msg(
                 (*dp).connected = true;
                 Ok(())
             }
-        }.unwrap();
+        }
+        .unwrap();
     };
     return 0;
 }
@@ -213,12 +219,12 @@ extern "C" fn bundler_after_usecs(usecs: u64) -> u64 {
 }
 
 pub struct Runtime {
+    log: slog::Logger,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
     qdisc_recv_handle: minion::Handle<portus::Error>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     outbox_recv_handle: minion::Handle<portus::Error>,
     portus_reader_handle: minion::Handle<portus::Error>,
-    alg_ready: crossbeam::Receiver<()>,
     flow_state: BundleFlowState,
 }
 
@@ -241,6 +247,8 @@ struct BundleFlowState {
 
 impl Runtime {
     pub fn new() -> Option<Self> {
+        let log = portus::algs::make_logger();
+
         let nlsk = netlink::Socket::<ipc::Blocking>::new().unwrap();
         let (qdisc_reader, qdisc_recv) = NlMsgReader::make(nlsk);
         let qdisc_recv_handle = qdisc_reader.spawn();
@@ -286,9 +294,10 @@ impl Runtime {
         }
 
         // Wait for algorithm to finish installing datapath programs
+        info!(log, "Wait for CCP to install datapath program");
         alg_ready.recv().unwrap();
-        eprintln!("starting new flow");
 
+        info!(log, "Initialize bundle flow in libccp");
         // this is a hack, we are pretending there is only one bundle/flow
         let mut dp_info = ccp::ccp_datapath_info {
             init_cwnd: 10,
@@ -307,13 +316,14 @@ impl Runtime {
         let mut fs: BundleFlowState = Default::default();
         fs.conn = Some(conn);
 
+        info!(log, "Inbox ready");
         Some(Runtime {
+            log,
             qdisc_recv,
             qdisc_recv_handle,
             outbox_recv,
             outbox_recv_handle,
             portus_reader_handle,
-            alg_ready,
             flow_state: fs,
         })
     }
@@ -326,7 +336,6 @@ impl Cancellable for Runtime {
         select!{
             recv(self.qdisc_recv) -> msg => {
                 if let Ok(msg) = msg {
-                    println!("got msg from qdisc! {:#?}", msg);
                     // remember the marked packet's send time
                     // so we can get its RTT later
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time);
@@ -334,13 +343,14 @@ impl Cancellable for Runtime {
                     let elapsed = (msg.epoch_time - self.flow_state.curr_epoch) as f64 / 1e9;
                     self.flow_state.send_rate = msg.epoch_bytes as f64 / elapsed;
 
+                    info!(self.log, "Marked packet"; "send_rate" => self.flow_state.send_rate);
+
                     // update the current epoch time
                     self.flow_state.curr_epoch = msg.epoch_time;
                 }
             },
             recv(self.outbox_recv) -> msg => {
                 if let Ok(msg) = msg {
-                    println!("got msg from outbox! {:#?}", msg);
                     // check packet marking
                     if let Some(pkt_timestamp) = self.flow_state.marked_packets.get(&msg.marked_packet_hash) {
                         self.flow_state.rtt_estimate = time::precise_time_ns() - pkt_timestamp;
@@ -357,6 +367,15 @@ impl Cancellable for Runtime {
                         (*conn).prims.rate_outgoing = self.flow_state.send_rate as u64;
                         (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
                     }
+
+                    info!(self.log, "CCP Invoke";
+                          "rtt" => unsafe { (*conn).prims.rtt_sample_us },
+                          "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
+                          "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
+                          "rtt_s" => self.flow_state.rtt_estimate / 1_000,
+                          "rate_outgoing_s" => self.flow_state.send_rate,
+                          "rate_incoming_s" => self.flow_state.recv_rate,
+                    );
 
                     // ccp_invoke
                     let ok = unsafe { ccp::ccp_invoke(conn) };
