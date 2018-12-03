@@ -263,7 +263,7 @@ impl Runtime {
         // TODO For now assumes root qdisc on the 10gp1 interface, but this
         // should be configurable  or we should add a deterministic way to
         // discover it correctly.
-        let qdisc = Qdisc::get(String::from("10gp1"), (1, 8001));
+        let qdisc = Qdisc::get(String::from("ens5"), (0x8002, 0x0));
 
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
@@ -338,6 +338,8 @@ impl Cancellable for Runtime {
                 if let Ok(msg) = msg {
                     // remember the marked packet's send time
                     // so we can get its RTT later
+                    // TODO -- this might need to get the current time instead of using the
+                    // kernel's 
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time);
                     // update r_in
                     let elapsed = (msg.epoch_time - self.flow_state.curr_epoch) as f64 / 1e9;
