@@ -97,9 +97,9 @@ fn main() {
     let dev = devs.into_iter().find(|dev| dev.name == iface);
     let mut cap = Capture::from_device(dev.unwrap())
         .unwrap()
-        .promisc(true) // Promiscuous mode because the packets are not destined for our IP
-        .timeout(1) // Poll every 1ms
+        .promisc(false) // Promiscuous mode because the packets are not destined for our IP
         .snaplen(42) // We only need up to byte 42 to read the sequence number
+        .immediate_mode(true)
         .open()
         .unwrap();
     cap.filter(filter).unwrap();
@@ -119,8 +119,8 @@ fn main() {
                 let hash = adler32(&data[SEQ..(SEQ + 4)], 4);
                 // If hash ends in X zeros, "mark" it
                 if hash % samplerate == 0 {
-                    tx.send((time::precise_time_ns(), hash, bytes_recvd))
-                        .unwrap()
+                    tx.send((time::precise_time_ns(), hash, bytes_recvd)).unwrap();
+                    bytes_recvd = 0;
                 }
             }
             _ => {}
