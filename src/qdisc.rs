@@ -10,11 +10,6 @@ pub struct Qdisc {
 use std::ffi::CString;
 impl Qdisc {
     pub fn get(if_name: String, (tc_maj, tc_min): (u32, u32)) -> Self {
-        Qdisc {
-            sock : std::ptr::null_mut(),
-            qdisc: std::ptr::null_mut(),
-        }
-        /*
         unsafe {
             let mut all_links: *mut nl_cache = std::mem::uninitialized();
             let mut all_qdiscs: *mut nl_cache = std::mem::uninitialized();
@@ -45,12 +40,9 @@ impl Qdisc {
 
             Qdisc { sock, qdisc }
         }
-        */
     }
 
     pub fn set_rate(&self, rate: u32, burst: u32) -> Result<(), ()> {
-        Ok(())
-        /*
         unsafe {
             rtnl_qdisc_tbf_set_rate(self.qdisc, rate as i32, burst as i32, 0);
             let ret = rtnl_qdisc_add(self.sock, self.qdisc, NLM_F_REPLACE as i32);
@@ -59,15 +51,12 @@ impl Qdisc {
             }
             Ok(())
         }
-        */
     }
 }
 impl Drop for Qdisc {
     fn drop(&mut self) {
-        /*
         unsafe {
             rtnl_qdisc_put(self.qdisc);
         }
-        */
     }
 }
