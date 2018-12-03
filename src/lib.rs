@@ -246,14 +246,14 @@ struct BundleFlowState {
 }
 
 impl Runtime {
-    pub fn new() -> Option<Self> {
+    pub fn new(listen_port: u16, iface: String, handle: (u32, u32)) -> Option<Self> {
         let log = portus::algs::make_logger();
 
         let nlsk = netlink::Socket::<ipc::Blocking>::new().unwrap();
         let (qdisc_reader, qdisc_recv) = NlMsgReader::make(nlsk);
         let qdisc_recv_handle = qdisc_reader.spawn();
 
-        let udpsk = udp::Socket::new(28316).unwrap();
+        let udpsk = udp::Socket::new(listen_port).unwrap();
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
         let outbox_recv_handle = outbox_reader.spawn();
 
@@ -263,7 +263,7 @@ impl Runtime {
         // TODO For now assumes root qdisc on the 10gp1 interface, but this
         // should be configurable  or we should add a deterministic way to
         // discover it correctly.
-        let qdisc = Qdisc::get(String::from("ens5"), (0x8002, 0x0));
+        let qdisc = Qdisc::get(iface, handle);
 
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
