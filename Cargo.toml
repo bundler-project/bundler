@@ -12,6 +12,7 @@ failure = "0.1"
 fnv = "1"
 minion = "0.1.0"
 pcap = { git = "https://github.com/ryan-robeson/pcap", branch = "set-immediate-mode" }
+#portus = "^0.4"
 portus = { git = "https://github.com/ccp-project/portus", branch = "bundler" }
 slog = "2"
 time = "0.1"

@@ -7,27 +7,27 @@ use bytes::{ByteOrder, LittleEndian};
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutBoxFeedbackMsg {
     pub bundle_id: u32,
-    pub epoch_bytes: u32,
     pub marked_packet_hash: u32,
-    pub recv_time: u64,
+    pub epoch_bytes: u64,
+    pub epoch_time: u64,
 }
 
 impl OutBoxFeedbackMsg {
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; 3 * 4 + 2 * 8]; // 28 bytes
+        let mut buf = vec![0u8; 2 * 4 + 2 * 8]; // 24 bytes
         LittleEndian::write_u32(&mut buf[0..4], self.bundle_id);
-        LittleEndian::write_u32(&mut buf[4..8], self.epoch_bytes);
-        LittleEndian::write_u32(&mut buf[8..12], self.marked_packet_hash);
-        LittleEndian::write_u64(&mut buf[12..20], self.recv_time);
+        LittleEndian::write_u32(&mut buf[4..8], self.marked_packet_hash);
+        LittleEndian::write_u64(&mut buf[8..16], self.epoch_bytes);
+        LittleEndian::write_u64(&mut buf[16..24], self.epoch_time);
         buf
     }
 
     pub fn from_slice(buf: &[u8]) -> Self {
         OutBoxFeedbackMsg {
             bundle_id: LittleEndian::read_u32(&buf[0..4]),
-            epoch_bytes: LittleEndian::read_u32(&buf[4..8]),
-            marked_packet_hash: LittleEndian::read_u32(&buf[8..12]),
-            recv_time: LittleEndian::read_u64(&buf[12..20]),
+            marked_packet_hash: LittleEndian::read_u32(&buf[4..8]),
+            epoch_bytes: LittleEndian::read_u64(&buf[8..16]),
+            epoch_time: LittleEndian::read_u64(&buf[16..24]),
         }
     }
 }
@@ -36,27 +36,27 @@ impl OutBoxFeedbackMsg {
 #[derive(Clone, Debug, PartialEq)]
 pub struct QDiscFeedbackMsg {
     pub bundle_id: u32,
-    pub epoch_bytes: u32,
     pub marked_packet_hash: u32,
+    pub epoch_bytes: u64,
     pub epoch_time: u64,
 }
 
 impl QDiscFeedbackMsg {
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; 3 * 4 + 1 * 8]; // 20 bytes
+        let mut buf = vec![0u8; 2 * 4 + 2 * 8]; // 24 bytes
         LittleEndian::write_u32(&mut buf[0..4], self.bundle_id);
-        LittleEndian::write_u32(&mut buf[4..8], self.epoch_bytes);
-        LittleEndian::write_u32(&mut buf[8..12], self.marked_packet_hash);
-        LittleEndian::write_u64(&mut buf[12..20], self.epoch_time);
+        LittleEndian::write_u32(&mut buf[4..8], self.marked_packet_hash);
+        LittleEndian::write_u64(&mut buf[8..16], self.epoch_bytes);
+        LittleEndian::write_u64(&mut buf[16..24], self.epoch_time);
         buf
     }
 
     pub fn from_slice(buf: &[u8]) -> Self {
         QDiscFeedbackMsg {
             bundle_id: LittleEndian::read_u32(&buf[0..4]),
-            epoch_bytes: LittleEndian::read_u32(&buf[4..8]),
-            marked_packet_hash: LittleEndian::read_u32(&buf[8..12]),
-            epoch_time: LittleEndian::read_u64(&buf[12..20]),
+            marked_packet_hash: LittleEndian::read_u32(&buf[4..8]),
+            epoch_bytes: LittleEndian::read_u64(&buf[8..16]),
+            epoch_time: LittleEndian::read_u64(&buf[16..24]),
         }
     }
 }
@@ -69,9 +69,9 @@ mod tests {
     fn check_outbox_msg() {
         let m = OutBoxFeedbackMsg {
             bundle_id: 3,
-            epoch_bytes: 0xe,
             marked_packet_hash: 0x3fff_ffff,
-            recv_time: 0xf0f0_f0f0,
+            epoch_bytes: 0xe,
+            epoch_time: 0xf0f0_f0f0,
         };
 
         let buf = m.as_bytes();
@@ -83,8 +83,8 @@ mod tests {
     fn check_qdisc_msg() {
         let m = QDiscFeedbackMsg {
             bundle_id: 3,
-            epoch_bytes: 0xe,
             marked_packet_hash: 0x3fff_ffff,
+            epoch_bytes: 0xe,
             epoch_time: 0x3030_3030,
         };
 

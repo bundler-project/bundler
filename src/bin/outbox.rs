@@ -79,15 +79,15 @@ fn main() {
     let inbox = matches.value_of("inbox").unwrap().to_owned();
     let sock = UdpSocket::bind("0.0.0.0:34254").expect("failed to create UDP socket");
 
-    let (tx, rx): (Sender<(u64, u32, u32)>, Receiver<(u64, u32, u32)>) = mpsc::channel();
+    let (tx, rx): (Sender<(u64, u32, u64)>, Receiver<(u64, u32, u64)>) = mpsc::channel();
 
     thread::spawn(move || loop {
         let (ts, hash, recvd) = rx.recv().unwrap();
         let msg = OutBoxFeedbackMsg {
             bundle_id: 42,
-            epoch_bytes: recvd,
             marked_packet_hash: hash,
-            recv_time: ts,
+            epoch_bytes: recvd,
+            epoch_time: ts,
         };
         sock.send_to(msg.as_bytes().as_slice(), &inbox)
             .expect("failed to send on UDP socket");
@@ -104,7 +104,7 @@ fn main() {
         .unwrap();
     cap.filter(filter).unwrap();
 
-    let mut bytes_recvd: u32 = 0;
+    let mut bytes_recvd: u64 = 0;
 
     loop {
         match cap.next() {
@@ -114,7 +114,7 @@ fn main() {
                 if data[PROTO] != IP_PROTO_TCP {
                     continue;
                 }
-                bytes_recvd += pkt.header.len;
+                bytes_recvd += pkt.header.len as u64;
                 // Extract the sequence number and hash it
                 let hash = adler32(&data[SEQ..(SEQ + 4)], 4);
                 // If hash ends in X zeros, "mark" it

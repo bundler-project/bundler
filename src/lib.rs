@@ -21,6 +21,7 @@ use portus::ipc::Ipc;
 use portus::Result;
 use slog::info;
 use std::os::unix::net::UnixDatagram;
+use std::collections::VecDeque;
 
 pub mod serialize;
 use self::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
@@ -62,7 +63,7 @@ impl Cancellable for NlMsgReader {
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
         self.0.recv(&mut self.1[0..100])?;
-        let m = QDiscFeedbackMsg::from_slice(&self.1[0..20]);
+        let m = QDiscFeedbackMsg::from_slice(&self.1[0..24]);
         self.2.send(m)?;
         Ok(minion::LoopState::Continue)
     }
@@ -82,8 +83,8 @@ impl Cancellable for UdpMsgReader {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
-        self.0.recv(&mut self.1[0..28])?;
-        let m = OutBoxFeedbackMsg::from_slice(&self.1[0..28]);
+        self.0.recv(&mut self.1[0..24])?;
+        let m = OutBoxFeedbackMsg::from_slice(&self.1[0..24]);
         self.2.send(m)?;
         Ok(minion::LoopState::Continue)
     }
@@ -234,12 +235,53 @@ struct DatapathImpl {
     connected: bool,
 }
 
+#[derive(Clone, Copy)]
+struct MarkedInstant {
+    time: u64,
+    pkt_hash: u32,
+    send_byte_clock: u64,
+}
+
+#[derive(Default)]
+pub struct MarkHistory {
+    marks: VecDeque<MarkedInstant>,
+}
+
+impl MarkHistory {
+    fn insert(&mut self, pkt_hash: u32, time: u64, send_byte_clock: u64) {
+        self.marks.push_back(MarkedInstant {
+            time,
+            pkt_hash,
+            send_byte_clock,
+        })
+    }
+
+    // TODO can implement binary search for perf
+    fn find_idx(&self, pkt_hash: u32) -> Option<usize> {
+        for i in 0..self.marks.len() {
+            if self.marks[i].pkt_hash == pkt_hash {
+                return Some(i);
+            }
+        }
+
+        None
+    }
+
+    fn get(&mut self, _now: u64, pkt_hash: u32) -> Option<MarkedInstant> {
+        let idx = self.find_idx(pkt_hash)?;
+        self.marks.drain(0..(idx + 1)).last()
+    }
+}
+
 #[derive(Default)]
 struct BundleFlowState {
     conn: Option<*mut ccp::ccp_connection>,
-    marked_packets: fnv::FnvHashMap<u32, u64>,
-    curr_epoch: u64,
-    prev_recv_epoch: u64,
+    marked_packets: MarkHistory,
+    prev_send_time: u64,
+    prev_send_byte_clock: u64,
+    prev_recv_time: u64,
+    prev_recv_byte_clock: u64,
+
     send_rate: f64,
     recv_rate: f64,
     rtt_estimate: u64,
@@ -327,62 +369,122 @@ impl Runtime {
             flow_state: fs,
         })
     }
+
+    //
+    // s1  |\   A       |
+    //     | -------    |
+    //     |    B   \   |
+    // s2  |\-----   ---| r1
+    //     |      \ /   |
+    //     | -------    |
+    // s1' |/   A'  \---| r2
+    //     |        /   |
+    //     | -------    |
+    // s2' |/   B'      |
+    //
+    //
+    // RTT = s2' - s2 = NOW - s2
+    // send epoch = s1 -> s2
+    // recv epoch = r1 -> r2
+    // r1 available with s1'
+    // r2 available with s2'
+    //
+    // We are currently at s2'.
+    fn update_measurements(&mut self, now: u64, sent_mark: MarkedInstant, recv_mark: OutBoxFeedbackMsg) {
+        let s1 = self.flow_state.prev_send_time;
+        let s1_bytes = self.flow_state.prev_send_byte_clock;
+        let s2 = sent_mark.time;
+        let s2_bytes = sent_mark.send_byte_clock;
+        let r1 = self.flow_state.prev_recv_time;
+        let r1_bytes = self.flow_state.prev_recv_byte_clock;
+        let r2 = recv_mark.epoch_time;
+        let r2_bytes = recv_mark.epoch_bytes;
+
+        // rtt is current time - sent mark time
+        self.flow_state.rtt_estimate = now - s2;
+
+        println!(
+            "prims send_hash {} s1 {} s2 {} s1_bytes {} s2_bytes {} recv_hash {} r1 {} r2 {} r1_bytes {} r2_bytes {}",
+            sent_mark.pkt_hash,
+            s1,
+            s2,
+            s1_bytes,
+            s2_bytes,
+            recv_mark.marked_packet_hash,
+            r1,
+            r2,
+            r1_bytes,
+            r2_bytes,
+        );
+
+        let send_epoch_seconds = (s2 - s1) as f64 / 1e9;
+        let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
+
+        let send_epoch_bytes = (s2_bytes - s1_bytes) as f64;
+        let recv_epoch_bytes = (r2_bytes - r1_bytes) as f64;
+
+        let send_rate = send_epoch_bytes / send_epoch_seconds;
+        let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
+
+        self.flow_state.send_rate = send_rate;
+        self.flow_state.recv_rate = recv_rate;
+
+        println!(
+            "rates send {} recv {}",
+            send_rate / 125000.0,
+            recv_rate / 125000.0,
+        );
+
+        // s2 now becomes s1 and r2 becomes r1
+        self.flow_state.prev_send_time = s2;
+        self.flow_state.prev_send_byte_clock = s2_bytes;
+        self.flow_state.prev_recv_time = r2;
+        self.flow_state.prev_recv_byte_clock = r2_bytes;
+    }
 }
 
 impl Cancellable for Runtime {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
-        select!{
+        select! {
             recv(self.qdisc_recv) -> msg => {
                 if let Ok(msg) = msg {
                     // remember the marked packet's send time
                     // so we can get its RTT later
                     // TODO -- this might need to get the current time instead of using the
-                    // kernel's 
-                    self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time);
-                    // update r_in
-                    let elapsed = (msg.epoch_time - self.flow_state.curr_epoch) as f64 / 1e9;
-                    self.flow_state.send_rate = msg.epoch_bytes as f64 / elapsed;
-
-                    info!(self.log, "Marked packet"; "send_rate" => self.flow_state.send_rate);
-
-                    // update the current epoch time
-                    self.flow_state.curr_epoch = msg.epoch_time;
+                    // kernel's
+                    self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
+                    println!("marked hash {} stime {} sbytes {}", msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                 }
             },
             recv(self.outbox_recv) -> msg => {
                 if let Ok(msg) = msg {
+                    println!("outb hash {} rtime {} rbytes {}", msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                     // check packet marking
-                    if let Some(pkt_timestamp) = self.flow_state.marked_packets.get(&msg.marked_packet_hash) {
-                        self.flow_state.rtt_estimate = time::precise_time_ns() - pkt_timestamp;
-                        let epoch_elapsed = (msg.recv_time - self.flow_state.prev_recv_epoch) as f64 / 1e9;
-                        self.flow_state.recv_rate = msg.epoch_bytes as f64 / epoch_elapsed;
+                    let now = time::precise_time_ns();
+                    if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
+                        self.update_measurements(now, mi, msg);
+                        
+                        let conn = self.flow_state.conn.unwrap();
+                        // set primitives
+                        unsafe {
+                            (*conn).prims.rtt_sample_us = self.flow_state.rtt_estimate / 1_000;
+                            (*conn).prims.rate_outgoing = self.flow_state.send_rate as u64;
+                            (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
+                        }
 
-                        self.flow_state.prev_recv_epoch = msg.recv_time;
-                    }
+                        //info!(self.log, "CCP Invoke";
+                        //      "rtt" => unsafe { (*conn).prims.rtt_sample_us },
+                        //      "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
+                        //      "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
+                        //);
 
-                    let conn = self.flow_state.conn.unwrap();
-                    // set primitives
-                    unsafe {
-                        (*conn).prims.rtt_sample_us = self.flow_state.rtt_estimate / 1_000;
-                        (*conn).prims.rate_outgoing = self.flow_state.send_rate as u64;
-                        (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
-                    }
-
-                    info!(self.log, "CCP Invoke";
-                          "rtt" => unsafe { (*conn).prims.rtt_sample_us },
-                          "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
-                          "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
-                          "rtt_s" => self.flow_state.rtt_estimate / 1_000,
-                          "rate_outgoing_s" => self.flow_state.send_rate,
-                          "rate_incoming_s" => self.flow_state.recv_rate,
-                    );
-
-                    // ccp_invoke
-                    let ok = unsafe { ccp::ccp_invoke(conn) };
-                    if ok < 0 {
-                        println!("ccp invoke error: {:?}", ok);
+                        // ccp_invoke
+                        let ok = unsafe { ccp::ccp_invoke(conn) };
+                        if ok < 0 {
+                            println!("ccp invoke error: {:?}", ok);
+                        }
                     }
                 }
             },
