@@ -120,7 +120,6 @@ fn main() {
                 // If hash ends in X zeros, "mark" it
                 if hash % samplerate == 0 {
                     tx.send((time::precise_time_ns(), hash, bytes_recvd)).unwrap();
-                    bytes_recvd = 0;
                 }
             }
             _ => {}
