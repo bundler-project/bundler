@@ -19,7 +19,7 @@ use portus::ipc;
 use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use portus::Result;
-use slog::info;
+use slog::{info, warn};
 use std::os::unix::net::UnixDatagram;
 use std::collections::VecDeque;
 
@@ -90,10 +90,10 @@ impl Cancellable for UdpMsgReader {
     }
 }
 
-struct UnixMsgReader(UnixDatagram, Vec<u8>, crossbeam::Sender<()>, u32);
+struct UnixMsgReader(UnixDatagram, Vec<u8>, crossbeam::Sender<()>, u32, slog::Logger);
 
 impl UnixMsgReader {
-    fn make() -> (Self, crossbeam::Receiver<()>) {
+    fn make(logger: slog::Logger) -> (Self, crossbeam::Receiver<()>) {
         let addr = "/tmp/ccp/0/out";
 
         match std::fs::create_dir_all("/tmp/ccp/0").err() {
@@ -114,7 +114,7 @@ impl UnixMsgReader {
 
         let (send, recv) = crossbeam::bounded(0);
 
-        let s = UnixMsgReader(sock, vec![0u8; 1024], send, 0);
+        let s = UnixMsgReader(sock, vec![0u8; 1024], send, 0, logger);
         (s, recv)
     }
 }
@@ -129,7 +129,7 @@ impl Cancellable for UnixMsgReader {
         let buf = self.1.as_mut_ptr() as *mut ::std::os::raw::c_char;
         let ok = unsafe { ccp::ccp_read_msg(buf, bytes_read as i32) };
         if ok < 0 {
-            println!("error in ccp_read_msg");
+            warn!(self.4, "ccp_read_msg error"; "code" => ok);
         }
 
         self.3 += 1;
@@ -299,7 +299,7 @@ impl Runtime {
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
         let outbox_recv_handle = outbox_reader.spawn();
 
-        let (portus_reader, alg_ready) = UnixMsgReader::make();
+        let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone());
         let portus_reader_handle = portus_reader.spawn();
 
         // TODO For now assumes root qdisc on the 10gp1 interface, but this
@@ -411,15 +411,8 @@ impl Runtime {
 
         let send_rate = send_epoch_bytes / send_epoch_seconds;
         let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
-
         self.flow_state.send_rate = send_rate;
         self.flow_state.recv_rate = recv_rate;
-
-        println!(
-            "rates send {} recv {}",
-            send_rate / 125000.0,
-            recv_rate / 125000.0,
-        );
 
         // s2 now becomes s1 and r2 becomes r1
         self.flow_state.prev_send_time = s2;
@@ -467,7 +460,7 @@ impl Cancellable for Runtime {
                         // ccp_invoke
                         let ok = unsafe { ccp::ccp_invoke(conn) };
                         if ok < 0 {
-                            println!("ccp invoke error: {:?}", ok);
+                            warn!(self.log, "CCP Invoke Error"; "code" => ok);
                         }
                     }
                 }
