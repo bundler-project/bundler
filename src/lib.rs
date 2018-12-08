@@ -20,6 +20,7 @@ use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use portus::Result;
 use slog::{info, warn};
+use std::rc::Rc;
 use std::os::unix::net::UnixDatagram;
 use std::collections::VecDeque;
 
@@ -156,6 +157,7 @@ extern "C" fn bundler_set_rate_abs(
     rate: u32,
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
+    // TODO set burst dynamically
     unsafe { (*dp).qdisc.set_rate(rate, 100_000).unwrap() };
 }
 
@@ -219,18 +221,8 @@ extern "C" fn bundler_after_usecs(usecs: u64) -> u64 {
     time::precise_time_ns() + usecs * 1_000
 }
 
-pub struct Runtime {
-    log: slog::Logger,
-    qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
-    qdisc_recv_handle: minion::Handle<portus::Error>,
-    outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
-    outbox_recv_handle: minion::Handle<portus::Error>,
-    portus_reader_handle: minion::Handle<portus::Error>,
-    flow_state: BundleFlowState,
-}
-
 struct DatapathImpl {
-    qdisc: Qdisc, // qdisc handle
+    qdisc: Rc<Qdisc>, // qdisc handle
     sk: UnixDatagram,
     connected: bool,
 }
@@ -346,11 +338,30 @@ impl BundleFlowState {
     }
 }
 
+pub struct Runtime {
+    log: slog::Logger,
+    /// number of times per pipe-size we should mark a packet, in expectation
+    sample_freq: u32,
+    /// to avoid too frequent sample_freq updates: when did we last change it?
+    prev_freq_update: u64,
+    /// current epoch length
+    curr_epoch_length: u32,
+    qdisc_handle: Rc<Qdisc>,
+    qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
+    qdisc_recv_handle: minion::Handle<portus::Error>,
+    outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
+    outbox_recv_handle: minion::Handle<portus::Error>,
+    portus_reader_handle: minion::Handle<portus::Error>,
+    /// flow measurements
+    flow_state: BundleFlowState,
+}
+
 impl Runtime {
-    pub fn new(listen_port: u16, iface: String, handle: (u32, u32)) -> Option<Self> {
+    pub fn new(listen_port: u16, iface: String, handle: (u32, u32), sample_freq: u32) -> Option<Self> {
         let log = portus::algs::make_logger();
 
         let nlsk = netlink::Socket::<ipc::Blocking>::new().unwrap();
+
         let (qdisc_reader, qdisc_recv) = NlMsgReader::make(nlsk);
         let qdisc_recv_handle = qdisc_reader.spawn();
 
@@ -361,17 +372,18 @@ impl Runtime {
         let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone());
         let portus_reader_handle = portus_reader.spawn();
 
-        // TODO For now assumes root qdisc on the 10gp1 interface, but this
-        // should be configurable  or we should add a deterministic way to
-        // discover it correctly.
         let qdisc = Qdisc::get(iface, handle);
+
+        // Initial epoch length is 128 packets. Setting this must succeed.
+        qdisc.set_epoch_length(128).unwrap(); 
+        let qdisc = Rc::new(qdisc);
 
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
 
         let dpi = DatapathImpl {
             sk: portus_sk,
-            qdisc,
+            qdisc: qdisc.clone(),
             connected: true,
         };
 
@@ -399,7 +411,7 @@ impl Runtime {
         alg_ready.recv().unwrap();
 
         info!(log, "Initialize bundle flow in libccp");
-        // this is a hack, we are pretending there is only one bundle/flow
+        // TODO this is a hack, we are pretending there is only one bundle/flow
         let mut dp_info = ccp::ccp_datapath_info {
             init_cwnd: 10,
             mss: 1500,
@@ -420,6 +432,10 @@ impl Runtime {
         info!(log, "Inbox ready");
         Some(Runtime {
             log,
+            sample_freq,
+            prev_freq_update: time::precise_time_ns(),
+            curr_epoch_length: 100,
+            qdisc_handle: qdisc,
             qdisc_recv,
             qdisc_recv_handle,
             outbox_recv,
@@ -428,6 +444,23 @@ impl Runtime {
             flow_state: fs,
         })
     }
+}
+
+const ADJUST_THRESHOLD_SECONDS: u64 = 1;
+pub fn adjust_sampling_interval(last_update: u64, curr_epoch: u32, rate_bps: f64) -> Option<u32> {
+    let now = time::precise_time_ns();
+    if (now - last_update) / 1_000_000_000 >= ADJUST_THRESHOLD_SECONDS {
+        let epoch_length_packets = (rate_bps / 125_000.0).round() as i32;
+        if epoch_length_packets > 0 {
+            let change_ratio = epoch_length_packets as f64 / curr_epoch as f64;
+            if change_ratio >= 2.0 {
+                return Some(curr_epoch << 1);
+            } else if change_ratio <= 0.5 {
+                return Some((curr_epoch >> 1) as u32);
+            }
+        }
+    }
+    return None;
 }
 
 impl Cancellable for Runtime {
@@ -450,6 +483,22 @@ impl Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         self.flow_state.update_measurements(now, mi, msg);
+                        let new_sampling_interval = adjust_sampling_interval(
+                            self.prev_freq_update,
+                            self.curr_epoch_length,
+                            self.flow_state.recv_rate,
+                        );
+
+                        if let Some(new_epoch_length) = new_sampling_interval {
+                            self.qdisc_handle
+                                .set_epoch_length(new_epoch_length)
+                                .and_then(|_| { // only update state on successful update
+                                    self.curr_epoch_length = new_epoch_length;
+                                    self.prev_freq_update = now;
+                                    Ok(())
+                                })
+                                .unwrap_or_else(|_| ());
+                        }
                         
                         let conn = self.flow_state.conn.unwrap();
                         // set primitives

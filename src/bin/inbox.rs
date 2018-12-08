@@ -41,6 +41,14 @@ fn main() {
                 .takes_value(true)
                 .required(true),
         )
+        .arg(
+            Arg::with_name("sample_rate")
+                .short("s")
+                .long("sample_rate")
+                .help("Number of times in each pipe-size batch we should mark a packet")
+                .default_value("100")
+                .required(true),
+        )
         .get_matches();
 
     let iface = String::from(matches.value_of("iface").unwrap());
@@ -65,6 +73,7 @@ fn main() {
             u32::from_str_radix(minor, 10)
         }
     }.unwrap();
-    let mut r = Runtime::new(listen_port, iface, (handle_major, handle_minor)).unwrap();
+    let sample_rate = matches.value_of("sample_rate").unwrap().parse().unwrap();
+    let mut r = Runtime::new(listen_port, iface, (handle_major, handle_minor), sample_rate).unwrap();
     r.run().unwrap()
 }

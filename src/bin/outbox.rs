@@ -6,6 +6,7 @@ use clap::{value_t, App, Arg};
 use pcap::{Capture, Device};
 
 use bundler::serialize::OutBoxFeedbackMsg;
+use bundler::adjust_sampling_interval;
 
 use std::net::UdpSocket;
 use std::sync::mpsc;
@@ -56,10 +57,10 @@ fn main() {
                 .required(true),
         )
         .arg(
-            Arg::with_name("samplerate")
+            Arg::with_name("sample_rate")
                 .short("s")
-                .long("samplerate")
-                .help("sample 1 out of every [samplerate] packets")
+                .long("sample_rate")
+                .help("sample 1 out of every [sample_rate] packets")
                 .takes_value(true)
                 .required(true),
         )
@@ -74,7 +75,7 @@ fn main() {
 
     let iface = matches.value_of("iface").unwrap();
     let filter = matches.value_of("filter").unwrap();
-    let samplerate = value_t!(matches.value_of("samplerate"), u32).unwrap();
+    let mut sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
 
     let inbox = matches.value_of("inbox").unwrap().to_owned();
     let sock = UdpSocket::bind("0.0.0.0:34254").expect("failed to create UDP socket");
@@ -105,21 +106,49 @@ fn main() {
     cap.filter(filter).unwrap();
 
     let mut bytes_recvd: u64 = 0;
+    let mut last_bytes_recvd: u64 = 0;
+    let mut r1: u64 = 0;
+    let mut prev_freq_update: u64 = 0;
 
     loop {
         match cap.next() {
             Ok(pkt) => {
+                let now = time::precise_time_ns();
                 let data = pkt.data;
+
                 // Is this a TCP packet?
                 if data[PROTO] != IP_PROTO_TCP {
                     continue;
                 }
+
                 bytes_recvd += pkt.header.len as u64;
+                
                 // Extract the sequence number and hash it
                 let hash = adler32(&data[SEQ..(SEQ + 4)], 4);
+                
                 // If hash ends in X zeros, "mark" it
-                if hash % samplerate == 0 {
-                    tx.send((time::precise_time_ns(), hash, bytes_recvd)).unwrap();
+                if hash % sample_rate == 0 {
+                    let r2 = now;
+                    tx.send((r2, hash, bytes_recvd)).unwrap();
+                    if r1 != 0 {
+                        let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
+                        let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
+                        let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
+                        println!("recv rate={}", recv_rate);
+                        let new_sampling_interval = adjust_sampling_interval(
+                            prev_freq_update,
+                            sample_rate,
+                            recv_rate,
+                        );
+
+                        if let Some(new_epoch_length) = new_sampling_interval {
+                            sample_rate = new_epoch_length;
+                            prev_freq_update = r2;
+                        }
+                    }
+
+                    r1 = r2;
+                    last_bytes_recvd = bytes_recvd;
                 }
             }
             _ => {}

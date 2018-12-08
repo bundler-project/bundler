@@ -1,5 +1,6 @@
 use bytes::{ByteOrder, LittleEndian};
 
+
 /// UDP out-of-band feedback from the out-box.
 /// Receive time of this message, combined with the
 /// send time of the corresponding marked packet, gets us
@@ -61,9 +62,34 @@ impl QDiscFeedbackMsg {
     }
 }
 
+/// Netlink message requesting the qdisc to change the rate at which it samples packets for a given
+/// bundle.
+/// The rate is specified as the epoch length in number of packets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QDiscUpdateMsg {
+    pub bundle_id: u32,
+    pub sample_rate: u32,
+}
+
+impl QDiscUpdateMsg {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; 2 * 4]; // 8 bytes
+        LittleEndian::write_u32(&mut buf[0..4], self.bundle_id);
+        LittleEndian::write_u32(&mut buf[4..8], self.sample_rate);
+        buf
+    }
+
+    pub fn from_slice(buf: &[u8]) -> Self {
+        QDiscUpdateMsg {
+            bundle_id: LittleEndian::read_u32(&buf[0..4]),
+            sample_rate: LittleEndian::read_u32(&buf[4..8]),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
+    use super::{OutBoxFeedbackMsg, QDiscFeedbackMsg, QDiscUpdateMsg};
 
     #[test]
     fn check_outbox_msg() {
@@ -90,6 +116,17 @@ mod tests {
 
         let buf = m.as_bytes();
         let ms = QDiscFeedbackMsg::from_slice(&buf);
+        assert_eq!(m, ms);
+    }
+
+    #[test]
+    fn check_update_msg() {
+        let m = QDiscUpdateMsg {
+            bundle_id: 4,
+            sample_rate: 128,
+        };
+        let buf = m.as_bytes();
+        let ms = QDiscUpdateMsg::from_slice(&buf);
         assert_eq!(m, ms);
     }
 }
