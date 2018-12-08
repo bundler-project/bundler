@@ -285,6 +285,65 @@ struct BundleFlowState {
     send_rate: f64,
     recv_rate: f64,
     rtt_estimate: u64,
+
+    bdp_estimate_packets: u32,
+}
+
+impl BundleFlowState {
+    //
+    // s1  |\   A       |
+    //     | -------    |
+    //     |    B   \   |
+    // s2  |\-----   ---| r1
+    //     |      \ /   |
+    //     | -------    |
+    // s1' |/   A'  \---| r2
+    //     |        /   |
+    //     | -------    |
+    // s2' |/   B'      |
+    //
+    //
+    // RTT = s2' - s2 = NOW - s2
+    // send epoch = s1 -> s2
+    // recv epoch = r1 -> r2
+    // r1 available with s1'
+    // r2 available with s2'
+    //
+    // We are currently at s2'.
+    fn update_measurements(&mut self, now: u64, sent_mark: MarkedInstant, recv_mark: OutBoxFeedbackMsg) {
+        let s1 = self.prev_send_time;
+        let s1_bytes = self.prev_send_byte_clock;
+        let s2 = sent_mark.time;
+        let s2_bytes = sent_mark.send_byte_clock;
+        let r1 = self.prev_recv_time;
+        let r1_bytes = self.prev_recv_byte_clock;
+        let r2 = recv_mark.epoch_time;
+        let r2_bytes = recv_mark.epoch_bytes;
+
+        // rtt is current time - sent mark time
+        self.rtt_estimate = now - s2;
+
+        let send_epoch_seconds = (s2 - s1) as f64 / 1e9;
+        let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
+
+        let send_epoch_bytes = (s2_bytes - s1_bytes) as f64;
+        let recv_epoch_bytes = (r2_bytes - r1_bytes) as f64;
+
+        let send_rate = send_epoch_bytes / send_epoch_seconds;
+        let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
+        self.send_rate = send_rate;
+        self.recv_rate = recv_rate;
+
+        let rtt_s = self.rtt_estimate as f64 / 1e9;
+        let bdp_estimate_bytes = send_rate as f64 * rtt_s;
+        self.bdp_estimate_packets = (bdp_estimate_bytes / 1500.0) as u32;
+
+        // s2 now becomes s1 and r2 becomes r1
+        self.prev_send_time = s2;
+        self.prev_send_byte_clock = s2_bytes;
+        self.prev_recv_time = r2;
+        self.prev_recv_byte_clock = r2_bytes;
+    }
 }
 
 impl Runtime {
@@ -369,57 +428,6 @@ impl Runtime {
             flow_state: fs,
         })
     }
-
-    //
-    // s1  |\   A       |
-    //     | -------    |
-    //     |    B   \   |
-    // s2  |\-----   ---| r1
-    //     |      \ /   |
-    //     | -------    |
-    // s1' |/   A'  \---| r2
-    //     |        /   |
-    //     | -------    |
-    // s2' |/   B'      |
-    //
-    //
-    // RTT = s2' - s2 = NOW - s2
-    // send epoch = s1 -> s2
-    // recv epoch = r1 -> r2
-    // r1 available with s1'
-    // r2 available with s2'
-    //
-    // We are currently at s2'.
-    fn update_measurements(&mut self, now: u64, sent_mark: MarkedInstant, recv_mark: OutBoxFeedbackMsg) {
-        let s1 = self.flow_state.prev_send_time;
-        let s1_bytes = self.flow_state.prev_send_byte_clock;
-        let s2 = sent_mark.time;
-        let s2_bytes = sent_mark.send_byte_clock;
-        let r1 = self.flow_state.prev_recv_time;
-        let r1_bytes = self.flow_state.prev_recv_byte_clock;
-        let r2 = recv_mark.epoch_time;
-        let r2_bytes = recv_mark.epoch_bytes;
-
-        // rtt is current time - sent mark time
-        self.flow_state.rtt_estimate = now - s2;
-
-        let send_epoch_seconds = (s2 - s1) as f64 / 1e9;
-        let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
-
-        let send_epoch_bytes = (s2_bytes - s1_bytes) as f64;
-        let recv_epoch_bytes = (r2_bytes - r1_bytes) as f64;
-
-        let send_rate = send_epoch_bytes / send_epoch_seconds;
-        let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
-        self.flow_state.send_rate = send_rate;
-        self.flow_state.recv_rate = recv_rate;
-
-        // s2 now becomes s1 and r2 becomes r1
-        self.flow_state.prev_send_time = s2;
-        self.flow_state.prev_send_byte_clock = s2_bytes;
-        self.flow_state.prev_recv_time = r2;
-        self.flow_state.prev_recv_byte_clock = r2_bytes;
-    }
 }
 
 impl Cancellable for Runtime {
@@ -441,7 +449,7 @@ impl Cancellable for Runtime {
                     // check packet marking
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
-                        self.update_measurements(now, mi, msg);
+                        self.flow_state.update_measurements(now, mi, msg);
                         
                         let conn = self.flow_state.conn.unwrap();
                         // set primitives
