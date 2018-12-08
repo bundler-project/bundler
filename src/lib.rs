@@ -403,20 +403,6 @@ impl Runtime {
         // rtt is current time - sent mark time
         self.flow_state.rtt_estimate = now - s2;
 
-        println!(
-            "prims send_hash {} s1 {} s2 {} s1_bytes {} s2_bytes {} recv_hash {} r1 {} r2 {} r1_bytes {} r2_bytes {}",
-            sent_mark.pkt_hash,
-            s1,
-            s2,
-            s1_bytes,
-            s2_bytes,
-            recv_mark.marked_packet_hash,
-            r1,
-            r2,
-            r1_bytes,
-            r2_bytes,
-        );
-
         let send_epoch_seconds = (s2 - s1) as f64 / 1e9;
         let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
 
@@ -455,12 +441,10 @@ impl Cancellable for Runtime {
                     // TODO -- this might need to get the current time instead of using the
                     // kernel's
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
-                    println!("marked hash {} stime {} sbytes {}", msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                 }
             },
             recv(self.outbox_recv) -> msg => {
                 if let Ok(msg) = msg {
-                    println!("outb hash {} rtime {} rbytes {}", msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                     // check packet marking
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
@@ -474,11 +458,11 @@ impl Cancellable for Runtime {
                             (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
                         }
 
-                        //info!(self.log, "CCP Invoke";
-                        //      "rtt" => unsafe { (*conn).prims.rtt_sample_us },
-                        //      "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
-                        //      "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
-                        //);
+                        info!(self.log, "CCP Invoke";
+                              "rtt" => unsafe { (*conn).prims.rtt_sample_us },
+                              "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
+                              "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
+                        );
 
                         // ccp_invoke
                         let ok = unsafe { ccp::ccp_invoke(conn) };
