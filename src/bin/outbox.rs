@@ -21,6 +21,7 @@ const PROTO_IN_IP_HEADER: usize = 10;
 const SEQ_IN_TCP_HEADER: usize = 5;
 // Values
 const IP_PROTO_TCP: u8 = 6;
+const SEQ_LENGTH: usize = 4;
 // Locations from beginning of packet
 const SEQ: usize = MAC_HEADER_LENGTH + IP_HEADER_LENGTH + SEQ_IN_TCP_HEADER - 1;
 const PROTO: usize = MAC_HEADER_LENGTH + PROTO_IN_IP_HEADER - 1;
@@ -71,6 +72,14 @@ fn main() {
                 .takes_value(true)
                 .required(true),
         )
+        .arg(
+            Arg::with_name("no_ethernet")
+                .long("no_ethernet")
+                .short("e")
+                .help("if true, assumes captured packets do not have ethernet")
+                .takes_value(false)
+                .required(true)
+        )
         .get_matches();
 
     let iface = matches.value_of("iface").unwrap();
@@ -79,6 +88,20 @@ fn main() {
 
     let inbox = matches.value_of("inbox").unwrap().to_owned();
     let sock = UdpSocket::bind("0.0.0.0:34254").expect("failed to create UDP socket");
+
+    let no_ethernet = matches.is_present("no_ethernet");
+    let proto_offset = if no_ethernet {
+        PROTO - MAC_HEADER_LENGTH
+    } else {
+        PROTO
+    };
+    let seq_offset = if no_ethernet {
+        SEQ - MAC_HEADER_LENGTH
+    } else {
+        SEQ
+    };
+
+
 
     let (tx, rx): (Sender<(u64, u32, u64)>, Receiver<(u64, u32, u64)>) = mpsc::channel();
 
@@ -117,15 +140,17 @@ fn main() {
                 let data = pkt.data;
 
                 // Is this a TCP packet?
-                if data[PROTO] != IP_PROTO_TCP {
+                if data[proto_offset] != IP_PROTO_TCP {
                     continue;
                 }
 
                 bytes_recvd += pkt.header.len as u64;
+                if no_ethernet {
+                    bytes_recvd += MAC_HEADER_LENGTH as u64;
+                }
                 
                 // Extract the sequence number and hash it
-                let hash = adler32(&data[SEQ..(SEQ + 4)], 4);
-                
+                let hash = adler32(&data[seq_offset..(seq_offset + SEQ_LENGTH)], SEQ_LENGTH as u8);
                 // If hash ends in X zeros, "mark" it
                 if hash % sample_rate == 0 {
                     let r2 = now;
