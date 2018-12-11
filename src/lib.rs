@@ -279,6 +279,8 @@ struct BundleFlowState {
     rtt_estimate: u64,
 
     bdp_estimate_packets: u32,
+
+    lost_bytes: u32,
 }
 
 impl BundleFlowState {
@@ -328,7 +330,10 @@ impl BundleFlowState {
 
         let rtt_s = self.rtt_estimate as f64 / 1e9;
         let bdp_estimate_bytes = send_rate as f64 * rtt_s;
-        self.bdp_estimate_packets = (bdp_estimate_bytes / 1500.0) as u32;
+        self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
+
+        let delta = send_epoch_bytes - recv_epoch_bytes;
+        self.lost_bytes = if delta > 0.0 { delta as u32 } else { 0 };
 
         // s2 now becomes s1 and r2 becomes r1
         self.prev_send_time = s2;
@@ -373,9 +378,8 @@ impl Runtime {
         let portus_reader_handle = portus_reader.spawn();
 
         let qdisc = Qdisc::get(iface, handle);
+        qdisc.set_epoch_length(100); // initial epoch length is 128 packets
 
-        // Initial epoch length is 128 packets. Setting this must succeed.
-        qdisc.set_epoch_length(128).unwrap(); 
         let qdisc = Rc::new(qdisc);
 
         // unix socket for sending *to* portus
@@ -414,7 +418,7 @@ impl Runtime {
         // TODO this is a hack, we are pretending there is only one bundle/flow
         let mut dp_info = ccp::ccp_datapath_info {
             init_cwnd: 10,
-            mss: 1500,
+            mss: 1514,
             src_ip: 0,
             src_port: 42,
             dst_ip: 0,
@@ -508,12 +512,14 @@ impl Cancellable for Runtime {
                             (*conn).prims.rtt_sample_us = self.flow_state.rtt_estimate / 1_000;
                             (*conn).prims.rate_outgoing = self.flow_state.send_rate as u64;
                             (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
+                            (*conn).prims.lost_pkts_sample = self.flow_state.lost_bytes / 1514;
                         }
 
                         info!(self.log, "CCP Invoke";
                               "rtt" => unsafe { (*conn).prims.rtt_sample_us },
                               "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
                               "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
+                              "lost_pkts_sample" => unsafe { (*conn).prims.lost_pkts_sample },
                         );
 
                         // ccp_invoke
