@@ -448,6 +448,7 @@ impl Runtime {
 
 const ADJUST_THRESHOLD_SECONDS: u64 = 1;
 pub fn adjust_sampling_interval(last_update: u64, curr_epoch: u32, rate_bps: f64) -> Option<u32> {
+    /*
     let now = time::precise_time_ns();
     if (now - last_update) / 1_000_000_000 >= ADJUST_THRESHOLD_SECONDS {
         let epoch_length_packets = (rate_bps / 125_000.0).round() as i32;
@@ -460,6 +461,7 @@ pub fn adjust_sampling_interval(last_update: u64, curr_epoch: u32, rate_bps: f64
             }
         }
     }
+    */
     return None;
 }
 
