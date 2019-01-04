@@ -499,7 +499,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   memcpy(&q->rate, &rate, sizeof(struct psched_ratecfg));
   memcpy(&q->peak, &peak, sizeof(struct psched_ratecfg));
 
-  pr_info("rate: %llu\n", rate);
+  pr_info("rate: %llu\n", *((u64*) &rate));
 
   sch_tree_unlock(sch);
   err = 0;
