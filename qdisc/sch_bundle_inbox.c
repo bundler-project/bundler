@@ -130,6 +130,7 @@ struct tbf_sched_data {
 
   /* bundler */
   struct sock *nl_sock;
+  u32 epoch_sample_rate;
   u64 epoch_bytes_sent; 
   u64 epoch_pkts_sent;
   char msg_buffer[24];
@@ -326,7 +327,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       hdr = (struct tcphdr *)skb_transport_header(skb);
       if (hdr) { 
           uint32_t hash = adler32(&hdr->seq, sizeof(u32));
-          if (hash % PACKET_SAMPLE_RATE == 0) {
+          if (hash % q->epoch_sample_rate == 0) {
               struct FeedbackMsg fmsg = {
                   .bundle_id = 42,
                   .marked_packet_hash = hash,
@@ -507,10 +508,29 @@ done:
   return err;
 }
 
-void tbf_nl_recv_msg(struct sk_buff *skb) {
-	printk(KERN_INFO "received netlink message, but shouldn't have!\n");
-}
 
+struct __attribute__((packed, aligned(4))) QDiscUpdateMsg {
+    u32 bundle_id;
+    u32 sample_rate;
+};
+
+struct tbf_sched_data *sch_bundle_inbox_q;
+
+void tbf_nl_recv_msg(struct sk_buff *skb) {
+    struct QDiscUpdateMsg msg;
+    struct nlmsghdr *nlh = nlmsg_hdr(skb);
+
+    if (sch_bundle_inbox_q == NULL) {
+        return;
+    }
+
+    memcpy(&msg, nlmsg_data(nlh), sizeof(struct QDiscUpdateMsg));
+    if (msg.sample_rate != 0) {
+        pr_info("[sch_bundle_inbox] sample_rate %u\n", msg.sample_rate);
+        sch_bundle_inbox_q->epoch_sample_rate = msg.sample_rate;
+    }
+    return;
+}
 
 static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
 {
@@ -518,6 +538,7 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
 	struct netlink_kernel_cfg cfg = {
 		.input = tbf_nl_recv_msg,
 	};
+  sch_bundle_inbox_q = q;
 
   if (opt == NULL)
     return -EINVAL;
@@ -526,6 +547,7 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
   qdisc_watchdog_init(&q->watchdog, sch);
   q->qdisc = &noop_qdisc;
 
+    q->epoch_sample_rate = PACKET_SAMPLE_RATE;
 	q->epoch_bytes_sent = 0;
 	q->epoch_pkts_sent = 0;
 

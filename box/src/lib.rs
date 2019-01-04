@@ -378,7 +378,7 @@ impl Runtime {
         let portus_reader_handle = portus_reader.spawn();
 
         let qdisc = Qdisc::get(iface, handle);
-        qdisc.set_epoch_length(100); // initial epoch length is 128 packets
+        qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
 
         let qdisc = Rc::new(qdisc);
 
@@ -438,7 +438,7 @@ impl Runtime {
             log,
             sample_freq,
             prev_freq_update: time::precise_time_ns(),
-            curr_epoch_length: 100,
+            curr_epoch_length: sample_freq,
             qdisc_handle: qdisc,
             qdisc_recv,
             qdisc_recv_handle,
