@@ -5,8 +5,11 @@ use super::serialize::QDiscUpdateMsg;
 use portus::ipc;
 use portus::ipc::netlink;
 use portus::ipc::Ipc;
+use slog;
+use slog::debug;
 
 pub struct Qdisc {
+    logger: slog::Logger,
     rtnl_sock: *mut nl_sock,
     qdisc: *mut rtnl_qdisc,
     update_sock: netlink::Socket<ipc::Blocking>,
@@ -14,7 +17,7 @@ pub struct Qdisc {
 
 use std::ffi::CString;
 impl Qdisc {
-    pub fn get(if_name: String, (tc_maj, tc_min): (u32, u32)) -> Self {
+    pub fn bind(logger: slog::Logger, if_name: String, (tc_maj, tc_min): (u32, u32)) -> Self {
         unsafe {
             let mut all_links: *mut nl_cache = std::mem::uninitialized();
             let mut all_qdiscs: *mut nl_cache = std::mem::uninitialized();
@@ -46,6 +49,7 @@ impl Qdisc {
             let update_sock = netlink::Socket::<ipc::Blocking>::new().unwrap();
 
             Qdisc {
+                logger,
                 rtnl_sock,
                 qdisc,
                 update_sock,
@@ -53,7 +57,8 @@ impl Qdisc {
         }
     }
 
-    pub fn set_rate(&self, rate: u32, burst: u32) -> Result<(), ()> {
+    pub fn set_rate(&mut self, rate: u32, burst: u32) -> Result<(), ()> {
+        debug!(self.logger, "set rate"; "rate" => rate, "burst" => burst);
         unsafe {
             rtnl_qdisc_tbf_set_rate(self.qdisc, rate as i32, burst as i32, 0);
             let ret = rtnl_qdisc_add(self.rtnl_sock, self.qdisc, NLM_F_REPLACE as i32);

@@ -18,7 +18,6 @@ use minion::Cancellable;
 use portus::Result;
 use slog::{info, warn};
 use std::os::unix::net::UnixDatagram;
-use std::rc::Rc;
 
 pub mod serialize;
 use self::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
@@ -61,7 +60,6 @@ extern "C" fn bundler_set_rate_abs(
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
     // TODO set burst dynamically
-    println!("rate: {}", rate);
     unsafe { (*dp).qdisc.set_rate(rate, 100_000).unwrap() };
 }
 
@@ -126,7 +124,7 @@ extern "C" fn bundler_after_usecs(usecs: u64) -> u64 {
 }
 
 struct DatapathImpl {
-    qdisc: Rc<Qdisc>, // qdisc handle
+    qdisc: Qdisc, // qdisc handle
     sk: UnixDatagram,
     connected: bool,
 }
@@ -216,7 +214,6 @@ impl BundleFlowState {
 
 pub struct Runtime {
     log: slog::Logger,
-    qdisc_handle: Rc<Qdisc>,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     /// flow measurements
@@ -246,16 +243,15 @@ impl Runtime {
         let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone());
         let _portus_reader_handle = portus_reader.spawn();
 
-        let qdisc = Qdisc::get(iface, handle);
+        let qdisc = Qdisc::bind(log.clone(), iface, handle);
         qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
-        let qdisc = Rc::new(qdisc);
 
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
 
         let dpi = DatapathImpl {
             sk: portus_sk,
-            qdisc: qdisc.clone(),
+            qdisc: qdisc,
             connected: true,
         };
 
@@ -304,7 +300,6 @@ impl Runtime {
         info!(log, "Inbox ready");
         Some(Runtime {
             log,
-            qdisc_handle: qdisc,
             qdisc_recv,
             outbox_recv,
             flow_state: fs,
