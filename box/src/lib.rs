@@ -45,12 +45,12 @@ mod readers;
 use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
 
 extern "C" fn bundler_set_cwnd(
-    _dp: *mut ccp::ccp_datapath,
+    dp: *mut ccp::ccp_datapath,
     _conn: *mut ccp::ccp_connection,
-    _cwnd: u32,
+    cwnd: u32,
 ) {
-    // no-op
-    // TODO: support enforcing a cwnd
+    let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
+    unsafe { (*dp).qdisc.set_approx_cwnd(cwnd) };
 }
 
 extern "C" fn bundler_set_rate_abs(
@@ -212,12 +212,15 @@ impl BundleFlowState {
     }
 }
 
+use std::cell::RefCell;
+use std::rc::Rc;
 pub struct Runtime {
     log: slog::Logger,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     /// flow measurements
     flow_state: BundleFlowState,
+    qdisc_rtt: Rc<RefCell<f64>>,
 }
 
 impl Runtime {
@@ -243,11 +246,16 @@ impl Runtime {
         let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone());
         let _portus_reader_handle = portus_reader.spawn();
 
-        let qdisc = Qdisc::bind(log.clone(), iface, handle);
-        qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
-
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
+
+        // communication with qdisc handle
+        // qdisc will be called within ccp_invoke, so there's no race
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let rtt_sec = Rc::new(RefCell::new(-1.0));
+        let qdisc = Qdisc::bind(log.clone(), iface, handle, rtt_sec.clone());
+        qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
 
         let dpi = DatapathImpl {
             sk: portus_sk,
@@ -303,6 +311,7 @@ impl Runtime {
             qdisc_recv,
             outbox_recv,
             flow_state: fs,
+            qdisc_rtt: rtt_sec,
         })
     }
 }
@@ -327,6 +336,7 @@ impl minion::Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         self.flow_state.update_measurements(now, mi, msg);
+                        *self.qdisc_rtt.borrow_mut() = self.flow_state.rtt_estimate as f64 / 1e9;
 
                         let conn = self.flow_state.conn.unwrap();
                         // set primitives

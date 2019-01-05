@@ -6,18 +6,28 @@ use portus::ipc;
 use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use slog;
-use slog::debug;
+use slog::{debug, info};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub struct Qdisc {
     logger: slog::Logger,
     rtnl_sock: *mut nl_sock,
     qdisc: *mut rtnl_qdisc,
     update_sock: netlink::Socket<ipc::Blocking>,
+    rate: u32,
+    cwnd: u32,
+    rtt_sec: Rc<RefCell<f64>>,
 }
 
 use std::ffi::CString;
 impl Qdisc {
-    pub fn bind(logger: slog::Logger, if_name: String, (tc_maj, tc_min): (u32, u32)) -> Self {
+    pub fn bind(
+        logger: slog::Logger,
+        if_name: String,
+        (tc_maj, tc_min): (u32, u32),
+        rtt_sec: Rc<RefCell<f64>>,
+    ) -> Self {
         unsafe {
             let mut all_links: *mut nl_cache = std::mem::uninitialized();
             let mut all_qdiscs: *mut nl_cache = std::mem::uninitialized();
@@ -53,12 +63,14 @@ impl Qdisc {
                 rtnl_sock,
                 qdisc,
                 update_sock,
+                rate: 0,
+                cwnd: 0,
+                rtt_sec,
             }
         }
     }
 
-    pub fn set_rate(&mut self, rate: u32, burst: u32) -> Result<(), ()> {
-        debug!(self.logger, "set rate"; "rate" => rate, "burst" => burst);
+    fn __set_rate(&mut self, rate: u32, burst: u32) -> Result<(), ()> {
         unsafe {
             rtnl_qdisc_tbf_set_rate(self.qdisc, rate as i32, burst as i32, 0);
             let ret = rtnl_qdisc_add(self.rtnl_sock, self.qdisc, NLM_F_REPLACE as i32);
@@ -67,6 +79,33 @@ impl Qdisc {
             }
             Ok(())
         }
+    }
+
+    pub fn set_approx_cwnd(&mut self, cwnd_bytes: u32) {
+        let rtt_sec = { *self.rtt_sec.borrow() };
+        if rtt_sec <= 0.0 {
+            return;
+        }
+
+        self.cwnd = cwnd_bytes;
+        let effective_rate = cwnd_bytes as f64 / rtt_sec;
+
+        info!(self.logger, "set cwnd";
+            "cwnd_pkts" => cwnd_bytes / 1500,
+            "effective_rate" => effective_rate,
+            "rate" => self.rate,
+        );
+
+        if effective_rate < self.rate as f64 {
+            self.__set_rate(effective_rate as u32, 100_000)
+                .unwrap_or_else(|_| ())
+        }
+    }
+
+    pub fn set_rate(&mut self, rate: u32, burst: u32) -> Result<(), ()> {
+        self.rate = rate;
+        debug!(self.logger, "set rate"; "rate" => rate, "burst" => burst);
+        self.__set_rate(rate, burst)
     }
 
     pub fn set_epoch_length(&self, epoch_length_packets: u32) -> Result<(), portus::Error> {
