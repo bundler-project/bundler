@@ -427,8 +427,8 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   psched_ratecfg_precompute(&rate, &qopt->rate, rate64);
 
   if (tb[TCA_TBF_BURST]) {
-    max_size = nla_get_u32(tb[TCA_TBF_BURST]);
-    buffer = psched_l2t_ns(&rate, max_size);
+    //max_size = nla_get_u32(tb[TCA_TBF_BURST]);
+    //buffer = psched_l2t_ns(&rate, max_size);
   } else {
     max_size = min_t(u64, psched_ns_t2l(&rate, buffer), ~0U);
   }
@@ -494,7 +494,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
     q->buffer = buffer;
   else
     q->buffer = PSCHED_TICKS2NS(qopt->buffer);
-  q->tokens = q->buffer;
+  //q->tokens = q->buffer;
   q->ptokens = q->mtu;
 
   memcpy(&q->rate, &rate, sizeof(struct psched_ratecfg));
