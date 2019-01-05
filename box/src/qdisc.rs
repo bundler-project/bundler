@@ -2,9 +2,9 @@ use std;
 
 use super::nl::*;
 use super::serialize::QDiscUpdateMsg;
-use super::netlink;
-use super::ipc;
-use super::ipc::Ipc;
+use portus::ipc;
+use portus::ipc::netlink;
+use portus::ipc::Ipc;
 
 pub struct Qdisc {
     rtnl_sock: *mut nl_sock,
@@ -45,7 +45,11 @@ impl Qdisc {
 
             let update_sock = netlink::Socket::<ipc::Blocking>::new().unwrap();
 
-            Qdisc { rtnl_sock, qdisc, update_sock }
+            Qdisc {
+                rtnl_sock,
+                qdisc,
+                update_sock,
+            }
         }
     }
 
@@ -61,7 +65,7 @@ impl Qdisc {
     }
 
     pub fn set_epoch_length(&self, epoch_length_packets: u32) -> Result<(), portus::Error> {
-        let msg = QDiscUpdateMsg{
+        let msg = QDiscUpdateMsg {
             bundle_id: 42,
             sample_rate: epoch_length_packets,
         };

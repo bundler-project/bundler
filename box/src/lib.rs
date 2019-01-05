@@ -15,14 +15,10 @@ extern crate slog;
 
 use crossbeam::select;
 use minion::Cancellable;
-use portus::ipc;
-use portus::ipc::netlink;
-use portus::ipc::Ipc;
 use portus::Result;
 use slog::{info, warn};
-use std::rc::Rc;
 use std::os::unix::net::UnixDatagram;
-use std::collections::VecDeque;
+use std::rc::Rc;
 
 pub mod serialize;
 use self::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
@@ -43,104 +39,11 @@ mod nl;
 pub mod qdisc;
 use self::qdisc::*;
 
-struct NlMsgReader(
-    netlink::Socket<ipc::Blocking>,
-    Vec<u8>,
-    crossbeam::Sender<QDiscFeedbackMsg>,
-);
+mod marks;
+use self::marks::MarkHistory;
 
-impl NlMsgReader {
-    pub fn make(
-        nl: netlink::Socket<ipc::Blocking>,
-    ) -> (Self, crossbeam::Receiver<QDiscFeedbackMsg>) {
-        let (send, recv) = crossbeam::unbounded();
-        let s = NlMsgReader(nl, vec![0u8; 100], send);
-        (s, recv)
-    }
-}
-
-impl Cancellable for NlMsgReader {
-    type Error = portus::Error;
-
-    fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
-        self.0.recv(&mut self.1[0..100])?;
-        let m = QDiscFeedbackMsg::from_slice(&self.1[0..24]);
-        self.2.send(m)?;
-        Ok(minion::LoopState::Continue)
-    }
-}
-
-struct UdpMsgReader(udp::Socket, Vec<u8>, crossbeam::Sender<OutBoxFeedbackMsg>);
-
-impl UdpMsgReader {
-    fn make(udp: udp::Socket) -> (Self, crossbeam::Receiver<OutBoxFeedbackMsg>) {
-        let (send, recv) = crossbeam::unbounded();
-        let s = UdpMsgReader(udp, vec![0u8; 28], send);
-        (s, recv)
-    }
-}
-
-impl Cancellable for UdpMsgReader {
-    type Error = portus::Error;
-
-    fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
-        self.0.recv(&mut self.1[0..24])?;
-        let m = OutBoxFeedbackMsg::from_slice(&self.1[0..24]);
-        self.2.send(m)?;
-        Ok(minion::LoopState::Continue)
-    }
-}
-
-struct UnixMsgReader(UnixDatagram, Vec<u8>, crossbeam::Sender<()>, u32, slog::Logger);
-
-impl UnixMsgReader {
-    fn make(logger: slog::Logger) -> (Self, crossbeam::Receiver<()>) {
-        let addr = "/tmp/ccp/0/out";
-
-        match std::fs::create_dir_all("/tmp/ccp/0").err() {
-            Some(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-        .unwrap();
-
-        match std::fs::remove_file(&addr).err() {
-            Some(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-        .unwrap();
-
-        let sock = UnixDatagram::bind(addr).unwrap();
-
-        let (send, recv) = crossbeam::bounded(0);
-
-        let s = UnixMsgReader(sock, vec![0u8; 1024], send, 0, logger);
-        (s, recv)
-    }
-}
-
-impl Cancellable for UnixMsgReader {
-    type Error = portus::Error;
-
-    fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
-        let bytes_read = self.0.recv(&mut self.1[..])?;
-
-        // cast the vec in self to a *mut c_char
-        let buf = self.1.as_mut_ptr() as *mut ::std::os::raw::c_char;
-        let ok = unsafe { ccp::ccp_read_msg(buf, bytes_read as i32) };
-        if ok < 0 {
-            warn!(self.4, "ccp_read_msg error"; "code" => ok);
-        }
-
-        self.3 += 1;
-        if self.3 == 1 {
-            self.2.send(())?;
-        }
-
-        Ok(minion::LoopState::Continue)
-    }
-}
+mod readers;
+use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
 
 extern "C" fn bundler_set_cwnd(
     _dp: *mut ccp::ccp_datapath,
@@ -158,6 +61,7 @@ extern "C" fn bundler_set_rate_abs(
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
     // TODO set burst dynamically
+    println!("rate: {}", rate);
     unsafe { (*dp).qdisc.set_rate(rate, 100_000).unwrap() };
 }
 
@@ -227,44 +131,6 @@ struct DatapathImpl {
     connected: bool,
 }
 
-#[derive(Clone, Copy)]
-struct MarkedInstant {
-    time: u64,
-    pkt_hash: u32,
-    send_byte_clock: u64,
-}
-
-#[derive(Default)]
-pub struct MarkHistory {
-    marks: VecDeque<MarkedInstant>,
-}
-
-impl MarkHistory {
-    fn insert(&mut self, pkt_hash: u32, time: u64, send_byte_clock: u64) {
-        self.marks.push_back(MarkedInstant {
-            time,
-            pkt_hash,
-            send_byte_clock,
-        })
-    }
-
-    // TODO can implement binary search for perf
-    fn find_idx(&self, pkt_hash: u32) -> Option<usize> {
-        for i in 0..self.marks.len() {
-            if self.marks[i].pkt_hash == pkt_hash {
-                return Some(i);
-            }
-        }
-
-        None
-    }
-
-    fn get(&mut self, _now: u64, pkt_hash: u32) -> Option<MarkedInstant> {
-        let idx = self.find_idx(pkt_hash)?;
-        self.marks.drain(0..(idx + 1)).last()
-    }
-}
-
 #[derive(Default)]
 struct BundleFlowState {
     conn: Option<*mut ccp::ccp_connection>,
@@ -304,7 +170,12 @@ impl BundleFlowState {
     // r2 available with s2'
     //
     // We are currently at s2'.
-    fn update_measurements(&mut self, now: u64, sent_mark: MarkedInstant, recv_mark: OutBoxFeedbackMsg) {
+    fn update_measurements(
+        &mut self,
+        now: u64,
+        sent_mark: marks::MarkedInstant,
+        recv_mark: OutBoxFeedbackMsg,
+    ) {
         let s1 = self.prev_send_time;
         let s1_bytes = self.prev_send_byte_clock;
         let s2 = sent_mark.time;
@@ -345,41 +216,38 @@ impl BundleFlowState {
 
 pub struct Runtime {
     log: slog::Logger,
-    /// number of times per pipe-size we should mark a packet, in expectation
-    sample_freq: u32,
-    /// to avoid too frequent sample_freq updates: when did we last change it?
-    prev_freq_update: u64,
-    /// current epoch length
-    curr_epoch_length: u32,
     qdisc_handle: Rc<Qdisc>,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
-    qdisc_recv_handle: minion::Handle<portus::Error>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
-    outbox_recv_handle: minion::Handle<portus::Error>,
-    portus_reader_handle: minion::Handle<portus::Error>,
     /// flow measurements
     flow_state: BundleFlowState,
 }
 
 impl Runtime {
-    pub fn new(listen_port: u16, iface: String, handle: (u32, u32), sample_freq: u32) -> Option<Self> {
+    pub fn new(
+        listen_port: u16,
+        iface: String,
+        handle: (u32, u32),
+        sample_freq: u32,
+    ) -> Option<Self> {
+        use portus::ipc;
+        use portus::ipc::netlink;
+
         let log = portus::algs::make_logger();
 
         let nlsk = netlink::Socket::<ipc::Blocking>::new().unwrap();
-
         let (qdisc_reader, qdisc_recv) = NlMsgReader::make(nlsk);
-        let qdisc_recv_handle = qdisc_reader.spawn();
+        let _qdisc_recv_handle = qdisc_reader.spawn();
 
         let udpsk = udp::Socket::new(listen_port).unwrap();
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
-        let outbox_recv_handle = outbox_reader.spawn();
+        let _outbox_recv_handle = outbox_reader.spawn();
 
         let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone());
-        let portus_reader_handle = portus_reader.spawn();
+        let _portus_reader_handle = portus_reader.spawn();
 
         let qdisc = Qdisc::get(iface, handle);
         qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
-
         let qdisc = Rc::new(qdisc);
 
         // unix socket for sending *to* portus
@@ -436,40 +304,15 @@ impl Runtime {
         info!(log, "Inbox ready");
         Some(Runtime {
             log,
-            sample_freq,
-            prev_freq_update: time::precise_time_ns(),
-            curr_epoch_length: sample_freq,
             qdisc_handle: qdisc,
             qdisc_recv,
-            qdisc_recv_handle,
             outbox_recv,
-            outbox_recv_handle,
-            portus_reader_handle,
             flow_state: fs,
         })
     }
 }
 
-const ADJUST_THRESHOLD_SECONDS: u64 = 1;
-pub fn adjust_sampling_interval(last_update: u64, curr_epoch: u32, rate_bps: f64) -> Option<u32> {
-    /*
-    let now = time::precise_time_ns();
-    if (now - last_update) / 1_000_000_000 >= ADJUST_THRESHOLD_SECONDS {
-        let epoch_length_packets = (rate_bps / 125_000.0).round() as i32;
-        if epoch_length_packets > 0 {
-            let change_ratio = epoch_length_packets as f64 / curr_epoch as f64;
-            if change_ratio >= 2.0 {
-                return Some(curr_epoch << 1);
-            } else if change_ratio <= 0.5 {
-                return Some((curr_epoch >> 1) as u32);
-            }
-        }
-    }
-    */
-    return None;
-}
-
-impl Cancellable for Runtime {
+impl minion::Cancellable for Runtime {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
@@ -489,23 +332,7 @@ impl Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         self.flow_state.update_measurements(now, mi, msg);
-                        let new_sampling_interval = adjust_sampling_interval(
-                            self.prev_freq_update,
-                            self.curr_epoch_length,
-                            self.flow_state.recv_rate,
-                        );
 
-                        if let Some(new_epoch_length) = new_sampling_interval {
-                            self.qdisc_handle
-                                .set_epoch_length(new_epoch_length)
-                                .and_then(|_| { // only update state on successful update
-                                    self.curr_epoch_length = new_epoch_length;
-                                    self.prev_freq_update = now;
-                                    Ok(())
-                                })
-                                .unwrap_or_else(|_| ());
-                        }
-                        
                         let conn = self.flow_state.conn.unwrap();
                         // set primitives
                         unsafe {

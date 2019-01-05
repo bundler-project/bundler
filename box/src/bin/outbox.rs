@@ -6,7 +6,6 @@ use clap::{value_t, App, Arg};
 use pcap::{Capture, Device};
 
 use bundler::serialize::OutBoxFeedbackMsg;
-use bundler::adjust_sampling_interval;
 
 use std::net::UdpSocket;
 use std::sync::mpsc;
@@ -78,13 +77,13 @@ fn main() {
                 .short("e")
                 .help("if true, assumes captured packets do not have ethernet")
                 .takes_value(false)
-                .required(true)
+                .required(true),
         )
         .get_matches();
 
     let iface = matches.value_of("iface").unwrap();
     let filter = matches.value_of("filter").unwrap();
-    let mut sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
+    let sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
 
     let inbox = matches.value_of("inbox").unwrap().to_owned();
     let sock = UdpSocket::bind("0.0.0.0:34254").expect("failed to create UDP socket");
@@ -100,8 +99,6 @@ fn main() {
     } else {
         SEQ
     };
-
-
 
     let (tx, rx): (Sender<(u64, u32, u64)>, Receiver<(u64, u32, u64)>) = mpsc::channel();
 
@@ -131,7 +128,6 @@ fn main() {
     let mut bytes_recvd: u64 = 0;
     let mut last_bytes_recvd: u64 = 0;
     let mut r1: u64 = 0;
-    let mut prev_freq_update: u64 = 0;
 
     loop {
         match cap.next() {
@@ -148,9 +144,12 @@ fn main() {
                 if no_ethernet {
                     bytes_recvd += MAC_HEADER_LENGTH as u64;
                 }
-                
+
                 // Extract the sequence number and hash it
-                let hash = adler32(&data[seq_offset..(seq_offset + SEQ_LENGTH)], SEQ_LENGTH as u8);
+                let hash = adler32(
+                    &data[seq_offset..(seq_offset + SEQ_LENGTH)],
+                    SEQ_LENGTH as u8,
+                );
                 // If hash ends in X zeros, "mark" it
                 if hash % sample_rate == 0 {
                     let r2 = now;
@@ -160,16 +159,6 @@ fn main() {
                         let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
                         let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
                         println!("recv rate={}", recv_rate);
-                        let new_sampling_interval = adjust_sampling_interval(
-                            prev_freq_update,
-                            sample_rate,
-                            recv_rate,
-                        );
-
-                        if let Some(new_epoch_length) = new_sampling_interval {
-                            sample_rate = new_epoch_length;
-                            prev_freq_update = r2;
-                        }
                     }
 
                     r1 = r2;
