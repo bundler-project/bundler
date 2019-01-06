@@ -1,5 +1,26 @@
 use bytes::{ByteOrder, LittleEndian};
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutBoxReportMsg {
+    pub bundle_id: u32,
+    pub epoch_length_packets: u32,
+}
+
+impl OutBoxReportMsg {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; 2 * 4]; // 8 bytes
+        LittleEndian::write_u32(&mut buf[0..4], self.bundle_id);
+        LittleEndian::write_u32(&mut buf[4..8], self.epoch_length_packets);
+        buf
+    }
+
+    pub fn from_slice(buf: &[u8]) -> Self {
+        OutBoxReportMsg {
+            bundle_id: LittleEndian::read_u32(&buf[0..4]),
+            epoch_length_packets: LittleEndian::read_u32(&buf[4..8]),
+        }
+    }
+}
 
 /// UDP out-of-band feedback from the out-box.
 /// Receive time of this message, combined with the

@@ -50,7 +50,7 @@ extern "C" fn bundler_set_cwnd(
     cwnd: u32,
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe { (*dp).qdisc.set_approx_cwnd(cwnd) };
+    unsafe { (*dp).qdisc.set_approx_cwnd(cwnd).unwrap_or_else(|_| ()) };
 }
 
 extern "C" fn bundler_set_rate_abs(
@@ -59,8 +59,7 @@ extern "C" fn bundler_set_rate_abs(
     rate: u32,
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    // TODO set burst dynamically
-    unsafe { (*dp).qdisc.set_rate(rate, 100_000).unwrap() };
+    unsafe { (*dp).qdisc.set_rate(rate).unwrap_or_else(|_| ()) };
 }
 
 extern "C" fn bundler_set_rate_rel(
@@ -220,7 +219,7 @@ pub struct Runtime {
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     /// flow measurements
     flow_state: BundleFlowState,
-    qdisc_rtt: Rc<RefCell<f64>>,
+    qdisc_measurements: Rc<RefCell<QdiscMeasurements>>,
 }
 
 impl Runtime {
@@ -239,7 +238,11 @@ impl Runtime {
         let (qdisc_reader, qdisc_recv) = NlMsgReader::make(nlsk);
         let _qdisc_recv_handle = qdisc_reader.spawn();
 
-        let udpsk = udp::Socket::new(listen_port).unwrap();
+        let (outbox_found_tx, outbox_found_rx) = std::sync::mpsc::channel();
+        let udpsk = udp::Socket::new(listen_port, outbox_found_tx).unwrap();
+        // udp socket for sending *to* outbox
+        let outbox_report = udpsk.try_clone();
+
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
         let _outbox_recv_handle = outbox_reader.spawn();
 
@@ -253,8 +256,20 @@ impl Runtime {
         // qdisc will be called within ccp_invoke, so there's no race
         use std::cell::RefCell;
         use std::rc::Rc;
-        let rtt_sec = Rc::new(RefCell::new(-1.0));
-        let qdisc = Qdisc::bind(log.clone(), iface, handle, rtt_sec.clone());
+        let qdisc_measurements = Rc::new(RefCell::new(QdiscMeasurements {
+            rtt_sec: -1.0,
+            recv_rate_bytes: -1.0,
+        }));
+
+        let mut qdisc = Qdisc::bind(
+            log.clone(),
+            iface,
+            handle,
+            qdisc_measurements.clone(),
+            outbox_found_rx,
+            outbox_report,
+        );
+
         qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
 
         let dpi = DatapathImpl {
@@ -311,7 +326,7 @@ impl Runtime {
             qdisc_recv,
             outbox_recv,
             flow_state: fs,
-            qdisc_rtt: rtt_sec,
+            qdisc_measurements,
         })
     }
 }
@@ -336,7 +351,11 @@ impl minion::Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         self.flow_state.update_measurements(now, mi, msg);
-                        *self.qdisc_rtt.borrow_mut() = self.flow_state.rtt_estimate as f64 / 1e9;
+                        {
+                            let mut ms = self.qdisc_measurements.borrow_mut();
+                            ms.rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
+                            ms.recv_rate_bytes = self.flow_state.recv_rate;
+                        } // end borrow_mut so that borrow inside ccp_invoke does not panic
 
                         let conn = self.flow_state.conn.unwrap();
                         // set primitives

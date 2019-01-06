@@ -5,8 +5,10 @@ extern crate time;
 use clap::{value_t, App, Arg};
 use pcap::{Capture, Device};
 
+use bundler::serialize;
 use bundler::serialize::OutBoxFeedbackMsg;
 
+use slog::info;
 use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -76,17 +78,19 @@ fn main() {
                 .long("no_ethernet")
                 .short("e")
                 .help("if true, assumes captured packets do not have ethernet")
-                .takes_value(false)
-                .required(true),
+                .takes_value(false),
         )
         .get_matches();
 
+    let log = portus::algs::make_logger();
+
     let iface = matches.value_of("iface").unwrap();
     let filter = matches.value_of("filter").unwrap();
-    let sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
+    let mut sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
 
     let inbox = matches.value_of("inbox").unwrap().to_owned();
-    let sock = UdpSocket::bind("0.0.0.0:34254").expect("failed to create UDP socket");
+    let sock = UdpSocket::bind("0.0.0.0:28317").expect("failed to create UDP socket");
+    let recv_sock = sock.try_clone().unwrap();
 
     let no_ethernet = matches.is_present("no_ethernet");
     let proto_offset = if no_ethernet {
@@ -129,7 +133,39 @@ fn main() {
     let mut last_bytes_recvd: u64 = 0;
     let mut r1: u64 = 0;
 
+    let (s, r) = mpsc::channel();
+    thread::spawn(move || {
+        let mut recv_buf = [0u8; 64];
+        loop {
+            match recv_sock.recv(&mut recv_buf) {
+                Ok(bytes) => {
+                    if bytes == 8 {
+                        let msg = serialize::OutBoxReportMsg::from_slice(&recv_buf);
+
+                        s.send(msg.epoch_length_packets).unwrap();
+                    }
+                }
+                Err(e) => println!("{:?}", e),
+            }
+        }
+    });
+
     loop {
+        match r.try_recv() {
+            Ok(epoch_length_packets) => {
+                if epoch_length_packets > 0 {
+                    info!(log, "adjust_epoch";
+                        "curr" => sample_rate,
+                        "new" => epoch_length_packets,
+                    );
+
+                    sample_rate = epoch_length_packets;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+
         match cap.next() {
             Ok(pkt) => {
                 let now = time::precise_time_ns();
@@ -157,8 +193,9 @@ fn main() {
                     if r1 != 0 {
                         let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
                         let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
-                        let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
-                        println!("recv rate={}", recv_rate);
+                        info!(log, "outbox epoch";
+                            "recv_rate" => recv_epoch_bytes / recv_epoch_seconds,
+                        );
                     }
 
                     r1 = r2;
