@@ -23,6 +23,9 @@
 #include <net/pkt_sched.h>
 #include <linux/tcp.h>
 #include <linux/netlink.h>
+#include <linux/version.h>
+
+#define NEW_KERNEL LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 
 
 /*  Simple Token Bucket Filter.
@@ -641,10 +644,12 @@ static struct Qdisc *tbf_leaf(struct Qdisc *sch, unsigned long arg)
   return q->qdisc;
 }
 
+#if NEW_KERNEL
 static unsigned long tbf_find(struct Qdisc *sch, u32 classid)
 {
   return 1;
 }
+#endif
 
 static void tbf_walk(struct Qdisc *sch, struct qdisc_walker *walker)
 {
@@ -662,7 +667,9 @@ static void tbf_walk(struct Qdisc *sch, struct qdisc_walker *walker)
 static const struct Qdisc_class_ops tbf_class_ops = {
   .graft    =  tbf_graft,
   .leaf    =  tbf_leaf,
+#if NEW_KERNEL
   .find    =  tbf_find,
+#endif
   .walk    =  tbf_walk,
   .dump    =  tbf_dump_class,
 };
