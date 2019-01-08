@@ -103,7 +103,7 @@ impl Qdisc {
                 curr_set_rate: 0x3fff_ffff,
                 measurements,
                 use_dynamic_epoch,
-                curr_epoch_length: 128,
+                curr_epoch_length: 0,
             }
         }
     }
@@ -140,7 +140,7 @@ impl Qdisc {
     }
 
     pub fn set_epoch_length(&mut self, epoch_length_packets: u32) -> Result<(), portus::Error> {
-        if !self.use_dynamic_epoch {
+        if !self.use_dynamic_epoch && self.curr_epoch_length > 0 {
             return Ok(());
         }
 

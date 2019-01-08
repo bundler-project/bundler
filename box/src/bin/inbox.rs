@@ -86,7 +86,7 @@ fn main() {
     let dynamic_sample_rate = matches
         .value_of("dynamic_sample_rate")
         .unwrap()
-        .parse()
+        .parse::<bool>()
         .unwrap();
     let mut r = Runtime::new(
         listen_port,
