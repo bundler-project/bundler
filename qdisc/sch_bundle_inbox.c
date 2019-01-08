@@ -277,18 +277,30 @@ static bool tbf_peak_present(const struct tbf_sched_data *q)
   return q->peak.rate_bytes_ps;
 }
 
-static uint32_t adler32(const void *buf, size_t buflength) {
-     const uint8_t *buffer = (const uint8_t*)buf;
+typedef u64 Fnv64_t;
+/*
+ * 64 bit magic FNV-0 and FNV-1 prime
+ */
+#define FNV1_64_INIT ((Fnv64_t)0xcbf29ce484222325ULL)
+#define FNV_64_PRIME ((Fnv64_t)0x100000001b3ULL)
 
-     uint32_t s1 = 1;
-     uint32_t s2 = 0;
+Fnv64_t
+fnv_64_buf(void *buf, size_t len, Fnv64_t hval)
+{
+    size_t i;
+    uint64_t v;
+    uint8_t *b = (uint8_t*) buf;
+    for (i = 0; i < len; i++) {
+        v = (uint64_t) b[i];
+        hval = hval ^ v;
+        hval *= FNV_64_PRIME;
+    }
 
-		 size_t n = 0;
-     for (n = 0; n < buflength; n++) {
-        s1 = (s1 + buffer[n]) % 65521;
-        s2 = (s2 + s1) % 65521;
-     }     
-     return (s2 << 16) | s1;
+    return hval;
+}
+
+static uint32_t hash_packet(void *buf, size_t buflength) {
+    return (uint32_t) fnv_64_buf(buf, buflength, FNV1_64_INIT);
 }
 
 static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
@@ -329,7 +341,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
 
       hdr = (struct tcphdr *)skb_transport_header(skb);
       if (hdr) { 
-          uint32_t hash = adler32(&hdr->seq, sizeof(u32));
+          uint32_t hash = hash_packet(&hdr->seq, sizeof(u32));
           if (hash % q->epoch_sample_rate == 0) {
               struct FeedbackMsg fmsg = {
                   .bundle_id = 42,
@@ -430,8 +442,8 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   psched_ratecfg_precompute(&rate, &qopt->rate, rate64);
 
   if (tb[TCA_TBF_BURST]) {
-    //max_size = nla_get_u32(tb[TCA_TBF_BURST]);
-    //buffer = psched_l2t_ns(&rate, max_size);
+    max_size = nla_get_u32(tb[TCA_TBF_BURST]);
+    buffer = psched_l2t_ns(&rate, max_size);
   } else {
     max_size = min_t(u64, psched_ns_t2l(&rate, buffer), ~0U);
   }

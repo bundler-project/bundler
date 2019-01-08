@@ -27,16 +27,12 @@ const SEQ_LENGTH: usize = 4;
 const SEQ: usize = MAC_HEADER_LENGTH + IP_HEADER_LENGTH + SEQ_IN_TCP_HEADER - 1;
 const PROTO: usize = MAC_HEADER_LENGTH + PROTO_IN_IP_HEADER - 1;
 
-fn adler32(buf: &[u8], len: u8) -> u32 {
-    let mut s1: u32 = 1;
-    let mut s2: u32 = 0;
-    let mut n: usize = 0;
-    while (n as u8) < len {
-        s1 = (s1 + (buf[n] as u32)) % 65521;
-        s2 = (s2 + s1) % 65521;
-        n += 1;
-    }
-    return (s2 << 16) | s1;
+fn hash_packet(buf: &[u8]) -> u32 {
+    use fnv;
+    use std::hash::Hasher;
+    let mut h = fnv::FnvHasher::default();
+    h.write(buf);
+    h.finish() as u32
 }
 
 fn main() {
@@ -103,6 +99,7 @@ fn main() {
     } else {
         SEQ
     };
+
 
     let (tx, rx): (Sender<(u64, u32, u64)>, Receiver<(u64, u32, u64)>) = mpsc::channel();
 
@@ -182,9 +179,8 @@ fn main() {
                 }
 
                 // Extract the sequence number and hash it
-                let hash = adler32(
-                    &data[seq_offset..(seq_offset + SEQ_LENGTH)],
-                    SEQ_LENGTH as u8,
+                let hash = hash_packet(
+                    &data[seq_offset..(seq_offset + SEQ_LENGTH)]
                 );
                 // If hash ends in X zeros, "mark" it
                 if hash % sample_rate == 0 {
