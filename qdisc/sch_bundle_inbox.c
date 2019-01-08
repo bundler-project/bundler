@@ -228,8 +228,10 @@ static int tbf_segment(struct sk_buff *skb, struct Qdisc *sch,
 
   segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 
-  if (IS_ERR_OR_NULL(segs))
+  if (IS_ERR_OR_NULL(segs)) {
+    printk(KERN_INFO "drop segment");
     return qdisc_drop(skb, sch, to_free);
+  }
 
   nb = 0;
   while (segs) {
@@ -262,17 +264,28 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
   if (qdisc_pkt_len(skb) > q->max_size) {
     if (skb_is_gso(skb) && skb_gso_mac_seglen(skb) <= q->max_size)
       return tbf_segment(skb, sch, to_free);
+    printk(KERN_INFO "drop max_size");
     return qdisc_drop(skb, sch, to_free);
   }
   ret = qdisc_enqueue(skb, q->qdisc, to_free);
   if (ret != NET_XMIT_SUCCESS) {
     if (net_xmit_drop_count(ret))
       qdisc_qstats_drop(sch);
+    printk(KERN_INFO "drop bfifo limit %d pkt_len %d qlen %d backlog %d drops %d requeues %d overlimits %d",
+        sch->limit,
+        qdisc_pkt_len(skb),
+        sch->qstats.qlen,
+        sch->qstats.backlog,
+        sch->qstats.drops,
+        sch->qstats.requeues,
+        sch->qstats.overlimits
+        );
     return ret;
   }
 
   qdisc_qstats_backlog_inc(sch, skb);
   sch->q.qlen++;
+  printk(KERN_INFO "qlen %d", sch->q.qlen);
   return NET_XMIT_SUCCESS;
 }
 
@@ -362,6 +375,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       q->ptokens = ptoks;
       qdisc_qstats_backlog_dec(sch, skb);
       sch->q.qlen--;
+      printk(KERN_INFO "qlen %d", sch->q.qlen);
       qdisc_bstats_update(sch, skb);
       return skb;
     }
@@ -540,7 +554,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   memcpy(&q->rate, &rate, sizeof(struct psched_ratecfg));
   memcpy(&q->peak, &peak, sizeof(struct psched_ratecfg));
 
-  pr_info("rate: %llu\n", *((u64*) &rate));
+  pr_info("rate %llu\n", *((u64*) &rate));
 
   sch_tree_unlock(sch);
   err = 0;
