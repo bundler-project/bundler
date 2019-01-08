@@ -23,6 +23,7 @@ pub struct Qdisc {
     cwnd_effective_rate: u32,
     curr_set_rate: u32,
     measurements: Rc<RefCell<QdiscMeasurements>>,
+    use_dynamic_epoch: bool,
     curr_epoch_length: u32,
 }
 
@@ -55,6 +56,7 @@ impl Qdisc {
         if_name: String,
         (tc_maj, tc_min): (u32, u32),
         measurements: Rc<RefCell<QdiscMeasurements>>,
+        use_dynamic_epoch: bool,
         outbox_found_rx: std::sync::mpsc::Receiver<std::net::SocketAddr>,
         outbox_report: std::net::UdpSocket,
     ) -> Self {
@@ -100,6 +102,7 @@ impl Qdisc {
                 cwnd_effective_rate: 0x3fff_ffff,
                 curr_set_rate: 0x3fff_ffff,
                 measurements,
+                use_dynamic_epoch,
                 curr_epoch_length: 128,
             }
         }
@@ -137,6 +140,10 @@ impl Qdisc {
     }
 
     pub fn set_epoch_length(&mut self, epoch_length_packets: u32) -> Result<(), portus::Error> {
+        if !self.use_dynamic_epoch {
+            return Ok(());
+        }
+
         info!(self.logger, "adjust_epoch";
             "curr" => self.curr_epoch_length,
             "new" => epoch_length_packets,

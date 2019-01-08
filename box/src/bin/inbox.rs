@@ -1,10 +1,10 @@
 extern crate bundler;
-extern crate minion;
 extern crate clap;
+extern crate minion;
 
 use bundler::Runtime;
-use minion::Cancellable;
 use clap::{value_t, App, Arg};
+use minion::Cancellable;
 
 fn main() {
     let matches = App::new("inbox")
@@ -49,6 +49,13 @@ fn main() {
                 .default_value("100")
                 .required(true),
         )
+        .arg(
+            Arg::with_name("dynamic_sample_rate")
+                .short("d")
+                .long("use_dynamic_sample_rate")
+                .help("Whether to dynamically adjust the sample rate")
+                .default_value("true"),
+        )
         .get_matches();
 
     let iface = String::from(matches.value_of("iface").unwrap());
@@ -62,7 +69,8 @@ fn main() {
         } else {
             u32::from_str_radix(major, 10)
         }
-    }.unwrap();
+    }
+    .unwrap();
     let handle_minor = {
         let minor = matches.value_of("handle_minor").unwrap();
         if minor.starts_with("0x") {
@@ -72,8 +80,21 @@ fn main() {
         } else {
             u32::from_str_radix(minor, 10)
         }
-    }.unwrap();
+    }
+    .unwrap();
     let sample_rate = matches.value_of("sample_rate").unwrap().parse().unwrap();
-    let mut r = Runtime::new(listen_port, iface, (handle_major, handle_minor), sample_rate).unwrap();
+    let dynamic_sample_rate = matches
+        .value_of("dynamic_sample_rate")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut r = Runtime::new(
+        listen_port,
+        iface,
+        (handle_major, handle_minor),
+        dynamic_sample_rate,
+        sample_rate,
+    )
+    .unwrap();
     r.run().unwrap()
 }

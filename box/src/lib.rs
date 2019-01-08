@@ -227,6 +227,7 @@ impl Runtime {
         listen_port: u16,
         iface: String,
         handle: (u32, u32),
+        use_dynamic_epoch: bool,
         sample_freq: u32,
     ) -> Option<Self> {
         use portus::ipc;
@@ -266,6 +267,7 @@ impl Runtime {
             iface,
             handle,
             qdisc_measurements.clone(),
+            use_dynamic_epoch,
             outbox_found_rx,
             outbox_report,
         );
