@@ -225,6 +225,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(
         listen_port: u16,
+        outbox: Option<String>,
         iface: String,
         handle: (u32, u32),
         use_dynamic_epoch: bool,
@@ -240,6 +241,11 @@ impl Runtime {
         let _qdisc_recv_handle = qdisc_reader.spawn();
 
         let (outbox_found_tx, outbox_found_rx) = std::sync::mpsc::channel();
+        if let Some(to) = outbox {
+            use std::net::ToSocketAddrs;
+            outbox_found_tx.send(to.to_socket_addrs().unwrap().next().unwrap()).unwrap_or_else(|_| ());
+        }
+
         let udpsk = udp::Socket::new(listen_port, outbox_found_tx).unwrap();
         // udp socket for sending *to* outbox
         let outbox_report = udpsk.try_clone();

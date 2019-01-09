@@ -67,7 +67,6 @@ fn main() {
                 .long("inbox")
                 .help("address of inbox")
                 .takes_value(true)
-                .required(true),
         )
         .arg(
             Arg::with_name("no_ethernet")
@@ -83,11 +82,6 @@ fn main() {
     let iface = matches.value_of("iface").unwrap();
     let filter = matches.value_of("filter").unwrap();
     let mut sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
-
-    let inbox = matches.value_of("inbox").unwrap().to_owned();
-    let sock = UdpSocket::bind("0.0.0.0:28317").expect("failed to create UDP socket");
-    let recv_sock = sock.try_clone().unwrap();
-
     let no_ethernet = matches.is_present("no_ethernet");
     let proto_offset = if no_ethernet {
         PROTO - MAC_HEADER_LENGTH
@@ -99,7 +93,38 @@ fn main() {
     } else {
         SEQ
     };
+    
+    let devs = Device::list().unwrap();
+    let dev = devs.into_iter().find(|dev| dev.name == iface);
+    let mut cap = Capture::from_device(dev.unwrap())
+        .unwrap()
+        .promisc(false) // Promiscuous mode because the packets are not destined for our IP
+        .snaplen(42) // We only need up to byte 42 to read the sequence number
+        .immediate_mode(true)
+        .open()
+        .unwrap();
+    cap.filter(filter).unwrap();
 
+    let mut inbox = matches.value_of("inbox").map(|a| {
+        use std::net::ToSocketAddrs;
+        a.to_socket_addrs().unwrap().next().unwrap()
+    });
+
+    let sock = UdpSocket::bind("0.0.0.0:28317").expect("failed to create UDP socket");
+    let recv_sock = sock.try_clone().unwrap();
+    if let None = inbox {
+        let mut buf = [0u8; 64];
+        match recv_sock.recv_from(&mut buf) {
+            Ok((bytes, addr)) => {
+                inbox = Some(addr);
+                if bytes == 8 {
+                    let msg = serialize::OutBoxReportMsg::from_slice(&buf);
+                    sample_rate = msg.epoch_length_packets;
+                }
+            }
+            Err(e) => println!("{:?}", e),
+        }
+    }
 
     let (tx, rx): (Sender<(u64, u32, u64)>, Receiver<(u64, u32, u64)>) = mpsc::channel();
 
@@ -111,20 +136,11 @@ fn main() {
             epoch_bytes: recvd,
             epoch_time: ts,
         };
-        sock.send_to(msg.as_bytes().as_slice(), &inbox)
+
+        sock.send_to(msg.as_bytes().as_slice(), inbox.unwrap())
             .expect("failed to send on UDP socket");
     });
 
-    let devs = Device::list().unwrap();
-    let dev = devs.into_iter().find(|dev| dev.name == iface);
-    let mut cap = Capture::from_device(dev.unwrap())
-        .unwrap()
-        .promisc(false) // Promiscuous mode because the packets are not destined for our IP
-        .snaplen(42) // We only need up to byte 42 to read the sequence number
-        .immediate_mode(true)
-        .open()
-        .unwrap();
-    cap.filter(filter).unwrap();
 
     let mut bytes_recvd: u64 = 0;
     let mut last_bytes_recvd: u64 = 0;
@@ -138,7 +154,6 @@ fn main() {
                 Ok(bytes) => {
                     if bytes == 8 {
                         let msg = serialize::OutBoxReportMsg::from_slice(&recv_buf);
-
                         s.send(msg.epoch_length_packets).unwrap();
                     }
                 }

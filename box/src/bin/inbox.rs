@@ -56,6 +56,12 @@ fn main() {
                 .help("Whether to dynamically adjust the sample rate")
                 .default_value("true"),
         )
+        .arg(
+            Arg::with_name("outbox")
+                .long("outbox")
+                .help("address of outbox")
+                .takes_value(true),
+        )
         .get_matches();
 
     let iface = String::from(matches.value_of("iface").unwrap());
@@ -88,8 +94,10 @@ fn main() {
         .unwrap()
         .parse::<bool>()
         .unwrap();
+    let outbox = matches.value_of("outbox").map(String::from);
     let mut r = Runtime::new(
         listen_port,
+        outbox,
         iface,
         (handle_major, handle_minor),
         dynamic_sample_rate,
