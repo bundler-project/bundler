@@ -7,3 +7,6 @@
 [submodule "qdisc/iproute2"]
 	path = qdisc/iproute2
 	url = https://github.com/ccp-project/iproute2.git
+[submodule "scripts/empiricial-traffic-gen"]
+	path = scripts/empiricial-traffic-gen
+	url = https://github.com/ccp-project/empiricial-traffic-gen
