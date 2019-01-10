@@ -25,6 +25,10 @@
 #include <linux/netlink.h>
 #include <linux/version.h>
 
+#ifdef __USE_FQ_CODEL__
+#include "sch_fq_codel.c"
+#endif
+
 #define NEW_KERNEL LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 
 
@@ -401,8 +405,22 @@ static const struct nla_policy tbf_policy[TCA_TBF_MAX + 1] = {
   [TCA_TBF_RATE64]  = { .type = NLA_U64 },
   [TCA_TBF_PRATE64]  = { .type = NLA_U64 },
   [TCA_TBF_BURST] = { .type = NLA_U32 },
-  [TCA_TBF_PBURST] = { .type = NLA_U32 },
+  [TCA_TBF_PBURST] = { .type = NLA_U32 }
 };
+
+#ifdef __USE_FQ_CODEL__
+struct Qdisc *create_inner_qdisc(struct Qdisc *sch) {
+  struct Qdisc *q;
+  int err = -ENOMEM;
+
+  printk(KERN_INFO "using fq_codel!");
+  q = qdisc_create_dflt(sch->dev_queue,
+      &fq_codel_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+
+  return q ? : ERR_PTR(err);
+}
+#endif
 
 static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
 {
@@ -481,11 +499,18 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   }
 
   if (q->qdisc != &noop_qdisc) {
+#ifdef __USE_FQ_CODEL__
+#else
     err = fifo_set_limit(q->qdisc, qopt->limit);
     if (err)
       goto done;
+#endif
   } else if (qopt->limit > 0) {
+#ifdef __USE_FQ_CODEL__
+    child = create_inner_qdisc(sch);
+#else
     child = fifo_create_dflt(sch, &bfifo_qdisc_ops, qopt->limit);
+#endif
     if (IS_ERR(child)) {
       err = PTR_ERR(child);
       goto done;
@@ -562,7 +587,7 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
   qdisc_watchdog_init(&q->watchdog, sch);
   q->qdisc = &noop_qdisc;
 
-    q->epoch_sample_rate = PACKET_SAMPLE_RATE;
+  q->epoch_sample_rate = PACKET_SAMPLE_RATE;
 	q->epoch_bytes_sent = 0;
 	q->epoch_pkts_sent = 0;
 
@@ -705,6 +730,9 @@ static struct Qdisc_ops tbf_qdisc_ops __read_mostly = {
 static int __init tbf_module_init(void)
 {
 	printk(KERN_INFO "bundle_inbox: init\n");
+#ifdef __USE_FQ_CODEL__
+  printk(KERN_INFO "using FQ_CODEL");
+#endif
   return register_qdisc(&tbf_qdisc_ops);
 }
 
