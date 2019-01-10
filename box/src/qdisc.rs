@@ -29,22 +29,14 @@ pub struct Qdisc {
 
 pub struct QdiscMeasurements {
     pub rtt_sec: f64,
-    pub recv_rate_bytes: f64,
-}
-
-fn round_down_power_of_2(x: u32) -> u32 {
-    let y = x.leading_zeros();
-    if y >= 32 {
-        0
-    } else {
-        1 << (32 - y - 1)
-    }
+    pub send_rate_bytes: f64,
+    pub curr_epoch_length: u32,
 }
 
 fn get_epoch_length(rate_bytes: f64, rtt_sec: f64) -> u32 {
     let inflight_bdp = rate_bytes * rtt_sec / 1500.0;
     // round to power of 2
-    let inflight_bdp_rounded = round_down_power_of_2(inflight_bdp as u32);
+    let inflight_bdp_rounded = super::round_down_power_of_2(inflight_bdp as u32);
 
     inflight_bdp_rounded
 }
@@ -150,6 +142,9 @@ impl Qdisc {
         );
 
         self.curr_epoch_length = epoch_length_packets;
+        {
+            self.measurements.borrow_mut().curr_epoch_length = epoch_length_packets;
+        } // end borrow of self.measurements
 
         self.check_outbox_found();
         if let Some(addr) = self.outbox_addr {

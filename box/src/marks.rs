@@ -37,3 +37,40 @@ impl MarkHistory {
         self.marks.drain(0..(idx + 1)).last()
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct Epoch {
+    pub elapsed_ns: u64,
+    pub bytes: u64,
+}
+
+#[derive(Default)]
+pub struct EpochHistory {
+    pub window: usize,
+    sending: VecDeque<Epoch>,
+    receiving: VecDeque<Epoch>,
+}
+
+fn rate<'a>(epochs: impl Iterator<Item = &'a Epoch>) -> f64 {
+    let (tot_bytes, tot_elapsed) = epochs
+        .map(|e| (e.bytes as f64, e.elapsed_ns as f64))
+        .fold((0.0, 0.0), |(b, t), (c_b, c_t)| (b + c_b, t + c_t));
+    tot_bytes / tot_elapsed
+}
+
+impl EpochHistory {
+    pub fn got_epoch(&mut self, send_epoch: Epoch, recv_epoch: Epoch) -> (f64, f64) {
+        self.sending.push_back(send_epoch);
+        self.receiving.push_back(recv_epoch);
+
+        while self.sending.len() > self.window {
+            self.sending.pop_front();
+        }
+
+        while self.receiving.len() > self.window {
+            self.receiving.pop_front();
+        }
+
+        (rate(self.sending.iter()), rate(self.receiving.iter()))
+    }
+}

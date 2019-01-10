@@ -39,7 +39,7 @@ pub mod qdisc;
 use self::qdisc::*;
 
 mod marks;
-use self::marks::MarkHistory;
+use self::marks::{Epoch, EpochHistory, MarkHistory};
 
 mod readers;
 use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
@@ -128,10 +128,21 @@ struct DatapathImpl {
     connected: bool,
 }
 
+fn round_down_power_of_2(x: u32) -> u32 {
+    let y = x.leading_zeros();
+    if y >= 32 {
+        0
+    } else {
+        1 << (32 - y - 1)
+    }
+}
+
 #[derive(Default)]
 struct BundleFlowState {
     conn: Option<*mut ccp::ccp_connection>,
     marked_packets: MarkHistory,
+    epoch_history: EpochHistory,
+
     prev_send_time: u64,
     prev_send_byte_clock: u64,
     prev_recv_time: u64,
@@ -185,14 +196,23 @@ impl BundleFlowState {
         // rtt is current time - sent mark time
         self.rtt_estimate = now - s2;
 
-        let send_epoch_seconds = (s2 - s1) as f64 / 1e9;
-        let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
+        let send_epoch_seconds = s2 - s1;
+        let recv_epoch_seconds = r2 - r1;
 
-        let send_epoch_bytes = (s2_bytes - s1_bytes) as f64;
-        let recv_epoch_bytes = (r2_bytes - r1_bytes) as f64;
+        let send_epoch_bytes = s2_bytes - s1_bytes;
+        let recv_epoch_bytes = r2_bytes - r1_bytes;
 
-        let send_rate = send_epoch_bytes / send_epoch_seconds;
-        let recv_rate = recv_epoch_bytes / recv_epoch_seconds;
+        let (send_rate, recv_rate) = self.epoch_history.got_epoch(
+            Epoch {
+                elapsed_ns: send_epoch_seconds,
+                bytes: send_epoch_bytes,
+            },
+            Epoch {
+                elapsed_ns: recv_epoch_seconds,
+                bytes: recv_epoch_bytes,
+            },
+        );
+
         self.send_rate = send_rate;
         self.recv_rate = recv_rate;
 
@@ -201,7 +221,7 @@ impl BundleFlowState {
         self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
 
         let delta = send_epoch_bytes - recv_epoch_bytes;
-        self.lost_bytes = if delta > 0.0 { delta as u32 } else { 0 };
+        self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
 
         // s2 now becomes s1 and r2 becomes r1
         self.prev_send_time = s2;
@@ -243,7 +263,9 @@ impl Runtime {
         let (outbox_found_tx, outbox_found_rx) = std::sync::mpsc::channel();
         if let Some(to) = outbox {
             use std::net::ToSocketAddrs;
-            outbox_found_tx.send(to.to_socket_addrs().unwrap().next().unwrap()).unwrap_or_else(|_| ());
+            outbox_found_tx
+                .send(to.to_socket_addrs().unwrap().next().unwrap())
+                .unwrap_or_else(|_| ());
         }
 
         let udpsk = udp::Socket::new(listen_port, outbox_found_tx).unwrap();
@@ -265,7 +287,8 @@ impl Runtime {
         use std::rc::Rc;
         let qdisc_measurements = Rc::new(RefCell::new(QdiscMeasurements {
             rtt_sec: -1.0,
-            recv_rate_bytes: -1.0,
+            send_rate_bytes: -1.0,
+            curr_epoch_length: sample_freq,
         }));
 
         let mut qdisc = Qdisc::bind(
@@ -359,10 +382,11 @@ impl minion::Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         self.flow_state.update_measurements(now, mi, msg);
+
                         {
                             let mut ms = self.qdisc_measurements.borrow_mut();
                             ms.rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
-                            ms.recv_rate_bytes = self.flow_state.recv_rate;
+                            ms.send_rate_bytes = self.flow_state.recv_rate;
                         } // end borrow_mut so that borrow inside ccp_invoke does not panic
 
                         let conn = self.flow_state.conn.unwrap();
@@ -386,6 +410,20 @@ impl minion::Cancellable for Runtime {
                         if ok < 0 {
                             warn!(self.log, "CCP Invoke Error"; "code" => ok);
                         }
+
+                        // after ccp_invoke, qdisc might have changed epoch_length
+                        // due to new rate being set.
+                        // accordingly update the measurement epoch window
+                        let epoch_length = {
+                            self.qdisc_measurements.borrow().curr_epoch_length
+                        };
+
+                        let rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
+                        let inflight_bdp = self.flow_state.send_rate * rtt_sec / 1500.0;
+                        let inflight_bdp_rounded = round_down_power_of_2(inflight_bdp as u32);
+
+                        let window = inflight_bdp_rounded / epoch_length;
+                        self.flow_state.epoch_history.window = window as usize;
                     }
                 }
             },
