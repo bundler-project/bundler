@@ -233,6 +233,9 @@ impl BundleFlowState {
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
+use crossbeam::tick;
+
 pub struct Runtime {
     log: slog::Logger,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
@@ -240,6 +243,8 @@ pub struct Runtime {
     /// flow measurements
     flow_state: BundleFlowState,
     qdisc_measurements: Rc<RefCell<QdiscMeasurements>>,
+    invoke_ticker: crossbeam::Receiver<Instant>,
+    ready_to_invoke: bool,
 }
 
 impl Runtime {
@@ -351,6 +356,8 @@ impl Runtime {
         let mut fs: BundleFlowState = Default::default();
         fs.conn = Some(conn);
 
+        let invoke_ticker = tick(Duration::from_millis(10)); 
+
         info!(log, "Inbox ready");
         Some(Runtime {
             log,
@@ -358,6 +365,8 @@ impl Runtime {
             outbox_recv,
             flow_state: fs,
             qdisc_measurements,
+            invoke_ticker,
+            ready_to_invoke: false,
         })
     }
 }
@@ -398,35 +407,43 @@ impl minion::Cancellable for Runtime {
                             (*conn).prims.lost_pkts_sample = self.flow_state.lost_bytes / 1514;
                         }
 
-                        info!(self.log, "CCP Invoke";
-                              "rtt" => unsafe { (*conn).prims.rtt_sample_us },
-                              "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
-                              "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
-                              "lost_pkts_sample" => unsafe { (*conn).prims.lost_pkts_sample },
-                        );
-
-                        // ccp_invoke
-                        let ok = unsafe { ccp::ccp_invoke(conn) };
-                        if ok < 0 {
-                            warn!(self.log, "CCP Invoke Error"; "code" => ok);
-                        }
-
-                        // after ccp_invoke, qdisc might have changed epoch_length
-                        // due to new rate being set.
-                        // accordingly update the measurement epoch window
-                        let epoch_length = {
-                            self.qdisc_measurements.borrow().curr_epoch_length
-                        };
-
-                        let rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
-                        let inflight_bdp = self.flow_state.send_rate * rtt_sec / 1500.0;
-                        let inflight_bdp_rounded = round_down_power_of_2(inflight_bdp as u32);
-
-                        let window = inflight_bdp_rounded / epoch_length;
-                        self.flow_state.epoch_history.window = window as usize;
+                        self.ready_to_invoke = true;
                     }
                 }
             },
+            recv(self.invoke_ticker) -> _ => {
+                if self.ready_to_invoke {
+                    let conn = self.flow_state.conn.unwrap();
+
+                    info!(self.log, "CCP Invoke";
+                          "rtt" => unsafe { (*conn).prims.rtt_sample_us },
+                          "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
+                          "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
+                          "lost_pkts_sample" => unsafe { (*conn).prims.lost_pkts_sample },
+                    );
+
+                    // ccp_invoke
+                    let ok = unsafe { ccp::ccp_invoke(conn) };
+                    if ok < 0 {
+                        warn!(self.log, "CCP Invoke Error"; "code" => ok);
+                    }
+
+                    // after ccp_invoke, qdisc might have changed epoch_length
+                    // due to new rate being set.
+                    // accordingly update the measurement epoch window
+                    let epoch_length = {
+                        self.qdisc_measurements.borrow().curr_epoch_length
+                    };
+
+                    let rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
+                    let inflight_bdp = self.flow_state.send_rate * rtt_sec / 1500.0;
+                    let inflight_bdp_rounded = round_down_power_of_2(inflight_bdp as u32);
+
+                    let window = inflight_bdp_rounded / epoch_length;
+                    self.flow_state.epoch_history.window = window as usize;
+
+                }
+            }
         };
 
         Ok(minion::LoopState::Continue)
