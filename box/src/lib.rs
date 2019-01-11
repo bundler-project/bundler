@@ -16,7 +16,7 @@ extern crate slog;
 use crossbeam::select;
 use minion::Cancellable;
 use portus::Result;
-use slog::{info, warn};
+use slog::{debug, info, warn};
 use std::os::unix::net::UnixDatagram;
 
 pub mod serialize;
@@ -50,7 +50,13 @@ extern "C" fn bundler_set_cwnd(
     cwnd: u32,
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe { (*dp).qdisc.set_approx_cwnd(cwnd).unwrap_or_else(|_| ()) };
+    unsafe {
+        (*dp)
+            .qdisc
+            .borrow_mut()
+            .set_approx_cwnd(cwnd)
+            .unwrap_or_else(|_| ())
+    };
 }
 
 extern "C" fn bundler_set_rate_abs(
@@ -59,7 +65,13 @@ extern "C" fn bundler_set_rate_abs(
     rate: u32,
 ) {
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe { (*dp).qdisc.set_rate(rate).unwrap_or_else(|_| ()) };
+    unsafe {
+        (*dp)
+            .qdisc
+            .borrow_mut()
+            .set_rate(rate)
+            .unwrap_or_else(|_| ())
+    };
 }
 
 extern "C" fn bundler_set_rate_rel(
@@ -115,7 +127,7 @@ extern "C" fn bundler_now() -> u64 {
 }
 
 extern "C" fn bundler_since_usecs(then: u64) -> u64 {
-    time::precise_time_ns() - then
+    (time::precise_time_ns() - then) / 1_000
 }
 
 extern "C" fn bundler_after_usecs(usecs: u64) -> u64 {
@@ -123,7 +135,7 @@ extern "C" fn bundler_after_usecs(usecs: u64) -> u64 {
 }
 
 struct DatapathImpl {
-    qdisc: Qdisc, // qdisc handle
+    qdisc: Rc<RefCell<Qdisc>>, // qdisc handle
     sk: UnixDatagram,
     connected: bool,
 }
@@ -196,22 +208,24 @@ impl BundleFlowState {
         // rtt is current time - sent mark time
         self.rtt_estimate = now - s2;
 
-        let send_epoch_seconds = s2 - s1;
-        let recv_epoch_seconds = r2 - r1;
+        let send_epoch_ns = s2 - s1;
+        let recv_epoch_ns = r2 - r1;
 
         let send_epoch_bytes = s2_bytes - s1_bytes;
         let recv_epoch_bytes = r2_bytes - r1_bytes;
 
         let (send_rate, recv_rate) = self.epoch_history.got_epoch(
             Epoch {
-                elapsed_ns: send_epoch_seconds,
+                elapsed_ns: send_epoch_ns,
                 bytes: send_epoch_bytes,
             },
             Epoch {
-                elapsed_ns: recv_epoch_seconds,
+                elapsed_ns: recv_epoch_ns,
                 bytes: recv_epoch_bytes,
             },
         );
+        //let send_rate = send_epoch_bytes as f64 / (send_epoch_ns as f64 / 1e9);
+        //let recv_rate = recv_epoch_bytes as f64 / (recv_epoch_ns as f64 / 1e9);
 
         self.send_rate = send_rate;
         self.recv_rate = recv_rate;
@@ -220,7 +234,7 @@ impl BundleFlowState {
         let bdp_estimate_bytes = send_rate as f64 * rtt_s;
         self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
 
-        let delta = send_epoch_bytes - recv_epoch_bytes;
+        let delta = send_epoch_bytes.saturating_sub(recv_epoch_bytes);
         self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
 
         // s2 now becomes s1 and r2 becomes r1
@@ -231,10 +245,10 @@ impl BundleFlowState {
     }
 }
 
+use crossbeam::tick;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use crossbeam::tick;
 
 pub struct Runtime {
     log: slog::Logger,
@@ -242,7 +256,7 @@ pub struct Runtime {
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     /// flow measurements
     flow_state: BundleFlowState,
-    qdisc_measurements: Rc<RefCell<QdiscMeasurements>>,
+    qdisc: Rc<RefCell<Qdisc>>,
     invoke_ticker: crossbeam::Receiver<Instant>,
     ready_to_invoke: bool,
 }
@@ -286,21 +300,10 @@ impl Runtime {
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
 
-        // communication with qdisc handle
-        // qdisc will be called within ccp_invoke, so there's no race
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let qdisc_measurements = Rc::new(RefCell::new(QdiscMeasurements {
-            rtt_sec: -1.0,
-            send_rate_bytes: -1.0,
-            curr_epoch_length: sample_freq,
-        }));
-
         let mut qdisc = Qdisc::bind(
             log.clone(),
             iface,
             handle,
-            qdisc_measurements.clone(),
             use_dynamic_epoch,
             outbox_found_rx,
             outbox_report,
@@ -308,9 +311,11 @@ impl Runtime {
 
         qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
 
+        let qdisc = Rc::new(RefCell::new(qdisc));
+
         let dpi = DatapathImpl {
             sk: portus_sk,
-            qdisc: qdisc,
+            qdisc: qdisc.clone(),
             connected: true,
         };
 
@@ -355,8 +360,9 @@ impl Runtime {
 
         let mut fs: BundleFlowState = Default::default();
         fs.conn = Some(conn);
+        fs.epoch_history.window = 1;
 
-        let invoke_ticker = tick(Duration::from_millis(10)); 
+        let invoke_ticker = tick(Duration::from_millis(10));
 
         info!(log, "Inbox ready");
         Some(Runtime {
@@ -364,7 +370,7 @@ impl Runtime {
             qdisc_recv,
             outbox_recv,
             flow_state: fs,
-            qdisc_measurements,
+            qdisc,
             invoke_ticker,
             ready_to_invoke: false,
         })
@@ -382,6 +388,7 @@ impl minion::Cancellable for Runtime {
                     // so we can get its RTT later
                     // TODO -- this might need to get the current time instead of using the
                     // kernel's
+                    debug!(self.log, "inbox epoch"; "time" => msg.epoch_time, "bytes" => msg.epoch_bytes);
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                 }
             },
@@ -391,12 +398,11 @@ impl minion::Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         self.flow_state.update_measurements(now, mi, msg);
-
                         {
-                            let mut ms = self.qdisc_measurements.borrow_mut();
-                            ms.rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
-                            ms.send_rate_bytes = self.flow_state.recv_rate;
-                        } // end borrow_mut so that borrow inside ccp_invoke does not panic
+                            let mut q = self.qdisc.borrow_mut();
+                            q.update_rtt(self.flow_state.rtt_estimate).unwrap_or_else(|_| ());
+                            q.update_send_rate(self.flow_state.send_rate as u64);
+                        }
 
                         let conn = self.flow_state.conn.unwrap();
                         // set primitives
@@ -406,6 +412,12 @@ impl minion::Cancellable for Runtime {
                             (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
                             (*conn).prims.lost_pkts_sample = self.flow_state.lost_bytes / 1514;
                         }
+
+                        debug!(self.log, "new measurements";
+                              "rtt" => self.flow_state.rtt_estimate / 1_000,
+                              "rate_outgoing" => self.flow_state.send_rate as u64,
+                              "rate_incoming" => self.flow_state.recv_rate as u64,
+                        );
 
                         self.ready_to_invoke = true;
                     }
@@ -432,7 +444,7 @@ impl minion::Cancellable for Runtime {
                     // due to new rate being set.
                     // accordingly update the measurement epoch window
                     let epoch_length = {
-                        self.qdisc_measurements.borrow().curr_epoch_length
+                        self.qdisc.borrow().get_curr_epoch_length()
                     };
 
                     let rtt_sec = self.flow_state.rtt_estimate as f64 / 1e9;
@@ -440,8 +452,7 @@ impl minion::Cancellable for Runtime {
                     let inflight_bdp_rounded = round_down_power_of_2(inflight_bdp as u32);
 
                     let window = inflight_bdp_rounded / epoch_length;
-                    self.flow_state.epoch_history.window = window as usize;
-
+                    self.flow_state.epoch_history.window = std::cmp::max(1, window as usize);
                 }
             }
         };

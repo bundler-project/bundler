@@ -8,8 +8,6 @@ use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use slog;
 use slog::info;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 pub struct Qdisc {
     logger: slog::Logger,
@@ -19,18 +17,13 @@ pub struct Qdisc {
     outbox_report: std::net::UdpSocket,
     outbox_addr: Option<std::net::SocketAddr>,
     outbox_found: std::sync::mpsc::Receiver<std::net::SocketAddr>,
-    rate: u32,
-    cwnd_effective_rate: u32,
+    rtt_ns: u64,
+    observed_sending_bytes_per_sec: u64,
+    rate_bytes_per_sec: u32,
+    cwnd_bytes: u32,
     curr_set_rate: u32,
-    measurements: Rc<RefCell<QdiscMeasurements>>,
     use_dynamic_epoch: bool,
     curr_epoch_length: u32,
-}
-
-pub struct QdiscMeasurements {
-    pub rtt_sec: f64,
-    pub send_rate_bytes: f64,
-    pub curr_epoch_length: u32,
 }
 
 fn get_epoch_length(rate_bytes: f64, rtt_sec: f64) -> u32 {
@@ -38,7 +31,7 @@ fn get_epoch_length(rate_bytes: f64, rtt_sec: f64) -> u32 {
     // round to power of 2
     let inflight_bdp_rounded = super::round_down_power_of_2(inflight_bdp as u32);
 
-    inflight_bdp_rounded
+    std::cmp::max(inflight_bdp_rounded >> 2, 4)
 }
 
 use std::ffi::CString;
@@ -47,7 +40,6 @@ impl Qdisc {
         logger: slog::Logger,
         if_name: String,
         (tc_maj, tc_min): (u32, u32),
-        measurements: Rc<RefCell<QdiscMeasurements>>,
         use_dynamic_epoch: bool,
         outbox_found_rx: std::sync::mpsc::Receiver<std::net::SocketAddr>,
         outbox_report: std::net::UdpSocket,
@@ -90,37 +82,30 @@ impl Qdisc {
                 outbox_report,
                 outbox_addr: None,
                 outbox_found: outbox_found_rx,
-                rate: 0x3fff_ffff,
-                cwnd_effective_rate: 0x3fff_ffff,
+                rtt_ns: 0x3fff_ffff,
+                observed_sending_bytes_per_sec: 0x3fff_ffff,
+                rate_bytes_per_sec: 0x3fff_ffff,
+                cwnd_bytes: 0x3fff_ffff,
                 curr_set_rate: 0x3fff_ffff,
-                measurements,
                 use_dynamic_epoch,
-                curr_epoch_length: 0,
+                curr_epoch_length: 4,
             }
         }
     }
 
     pub fn set_approx_cwnd(&mut self, cwnd_bytes: u32) -> Result<(), ()> {
-        let rtt_sec = self.rtt();
-        if rtt_sec <= 0.0 || cwnd_bytes / 1500 == 0 {
+        if cwnd_bytes / 1500 == 0 {
             return Err(());
         }
 
-        let effective_rate = cwnd_bytes as f64 / rtt_sec;
-        self.cwnd_effective_rate = effective_rate as u32;
-
-        info!(self.logger, "set cwnd";
-            "cwnd_pkts" => cwnd_bytes / 1500,
-            "effective_rate" => effective_rate,
-            "rate" => self.rate,
-        );
-
+        info!(self.logger, "set cwnd"; "cwnd_pkts" => cwnd_bytes / 1500);
+        self.cwnd_bytes = cwnd_bytes;
         self.__set_rate()
     }
 
     pub fn set_rate(&mut self, rate: u32) -> Result<(), ()> {
         info!(self.logger, "set rate"; "rate" => rate);
-        self.rate = rate;
+        self.rate_bytes_per_sec = rate;
         self.__set_rate()
     }
 
@@ -142,10 +127,6 @@ impl Qdisc {
         );
 
         self.curr_epoch_length = epoch_length_packets;
-        {
-            self.measurements.borrow_mut().curr_epoch_length = epoch_length_packets;
-        } // end borrow of self.measurements
-
         self.check_outbox_found();
         if let Some(addr) = self.outbox_addr {
             // tell the outbox what the epoch length is
@@ -167,16 +148,43 @@ impl Qdisc {
         self.update_sock.send(&msg.as_bytes())
     }
 
+    pub fn update_rtt(&mut self, rtt_ns: u64) -> Result<(), ()> {
+        self.rtt_ns = rtt_ns;
+        self.__set_rate()
+    }
+
+    pub fn update_send_rate(&mut self, observed_sending_bytes_per_sec: u64) {
+        self.observed_sending_bytes_per_sec = observed_sending_bytes_per_sec;
+        let epoch_length = get_epoch_length(
+            self.observed_sending_bytes_per_sec as f64,
+            self.rtt_ns as f64 / 1e9,
+        );
+        self.set_epoch_length(epoch_length).unwrap_or_else(|_| ());
+    }
+
+    pub fn get_curr_epoch_length(&self) -> u32 {
+        self.curr_epoch_length
+    }
+
     fn __set_rate(&mut self) -> Result<(), ()> {
-        let rate = std::cmp::min(self.rate, self.cwnd_effective_rate);
+        if self.cwnd_bytes == 0x3fff_ffff && self.rate_bytes_per_sec == 0x3fff_ffff {
+            return Ok(());
+        }
+
+        let rtt_sec = self.rtt_ns as f64 / 1e9;
+        let cwnd_effective_rate = self.cwnd_bytes as f64 / rtt_sec;
+        let rate = std::cmp::min(self.rate_bytes_per_sec, cwnd_effective_rate as u32);
         if rate == self.curr_set_rate {
             return Ok(());
         }
 
         self.curr_set_rate = rate;
-        let epoch_length = get_epoch_length(rate as f64, self.rtt());
-        self.set_epoch_length(epoch_length).unwrap_or_else(|_| ());
-        info!(self.logger, "__set_rate"; "rate" => rate);
+        info!(self.logger, "__set_rate";
+            "set_rate" => rate,
+            "cwnd_effective_rate" => cwnd_effective_rate,
+            "rate" => self.rate_bytes_per_sec,
+        );
+
         unsafe {
             // TODO set burst dynamically
             rtnl_qdisc_tbf_set_rate(self.qdisc, rate as i32, 100_000, 0);
@@ -186,10 +194,6 @@ impl Qdisc {
             }
             Ok(())
         }
-    }
-
-    fn rtt(&self) -> f64 {
-        self.measurements.borrow().rtt_sec
     }
 }
 impl Drop for Qdisc {

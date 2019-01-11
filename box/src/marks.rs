@@ -52,16 +52,18 @@ pub struct EpochHistory {
 }
 
 fn rate<'a>(epochs: impl Iterator<Item = &'a Epoch>) -> f64 {
-    let (tot_bytes, tot_elapsed) = epochs
+    let (tot_bytes, tot_elapsed_ns) = epochs
         .map(|e| (e.bytes as f64, e.elapsed_ns as f64))
         .fold((0.0, 0.0), |(b, t), (c_b, c_t)| (b + c_b, t + c_t));
-    tot_bytes / tot_elapsed
+    tot_bytes / (tot_elapsed_ns / 1e9)
 }
 
 impl EpochHistory {
     pub fn got_epoch(&mut self, send_epoch: Epoch, recv_epoch: Epoch) -> (f64, f64) {
         self.sending.push_back(send_epoch);
         self.receiving.push_back(recv_epoch);
+
+        assert!(self.window > 0);
 
         while self.sending.len() > self.window {
             self.sending.pop_front();
