@@ -285,7 +285,9 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
   qdisc_qstats_backlog_inc(sch, skb);
   sch->q.qlen++;
+#ifdef __VERBOSE_LOGGING__
   pr_info("[sch_bundle_inbox] qlen %d", sch->q.qlen);
+#endif
   return NET_XMIT_SUCCESS;
 }
 
@@ -375,7 +377,9 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       q->ptokens = ptoks;
       qdisc_qstats_backlog_dec(sch, skb);
       sch->q.qlen--;
+#ifdef __VERBOSE_LOGGING__
       pr_info("[sch_bundle_inbox] qlen %d", sch->q.qlen);
+#endif
       qdisc_bstats_update(sch, skb);
       return skb;
     }
@@ -746,6 +750,9 @@ static int __init tbf_module_init(void)
 	printk(KERN_INFO "bundle_inbox: init\n");
 #ifdef __USE_FQ_CODEL__
   printk(KERN_INFO "using FQ_CODEL");
+#endif
+#ifdef __VERBOSE_LOGGING__
+  printk(KERN_INFO "logging instantaneous queue lengths");
 #endif
   return register_qdisc(&tbf_qdisc_ops);
 }

@@ -1,10 +1,14 @@
 USE_FQ_CODEL = n
+VERBOSE_LOGGING = n
 
 TARGET = sch_bundle_inbox
 #sch_bundle_inbox-objs := sch_bundle_inbox.o # sch_fq_codel.o
 
 ifeq ($(USE_FQ_CODEL),y)
     FLAGS = -D__USE_FQ_CODEL__
+endif
+ifeq ($(VERBOSE_LOGGING), y)
+	FLAGS += -D__VERBOSE_LOGGING__
 endif
 
 EXTRA_CFLAGS += $(FLAGS)
