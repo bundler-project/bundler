@@ -150,7 +150,7 @@ void send_to_dp(struct tbf_sched_data *q, char *msg, int msg_size) {
 
 	skb_out = nlmsg_new(msg_size, GFP_NOWAIT);
 	if (!skb_out) {
-		printk(KERN_ERR "failed to allocate new skb for netlink\n");
+		printk(KERN_ERR "bundle_inbox_err: failed to allocate new skb for netlink\n");
 	}
 
 	nlh = nlmsg_put(
@@ -172,7 +172,7 @@ void send_to_dp(struct tbf_sched_data *q, char *msg, int msg_size) {
 		GFP_NOWAIT
 	);
 	if (res < 0) {
-		printk(KERN_ERR "failed to send netlink message %d\n", res);
+		printk(KERN_ERR "bundle_inbox_err: failed to send netlink message %d\n", res);
 	}
 }
 
@@ -264,14 +264,14 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
   if (qdisc_pkt_len(skb) > q->max_size) {
     if (skb_is_gso(skb) && skb_gso_mac_seglen(skb) <= q->max_size)
       return tbf_segment(skb, sch, to_free);
-    printk(KERN_INFO "drop max_size");
+    pr_info("[sch_bundle_inbox] drop max_size");
     return qdisc_drop(skb, sch, to_free);
   }
   ret = qdisc_enqueue(skb, q->qdisc, to_free);
   if (ret != NET_XMIT_SUCCESS) {
     if (net_xmit_drop_count(ret))
       qdisc_qstats_drop(sch);
-    printk(KERN_INFO "drop bfifo limit %d pkt_len %d qlen %d backlog %d drops %d requeues %d overlimits %d",
+    pr_info("[sch_bundle_inbox] drop bfifo limit %d pkt_len %d qlen %d backlog %d drops %d requeues %d overlimits %d",
         sch->limit,
         qdisc_pkt_len(skb),
         sch->qstats.qlen,
@@ -285,7 +285,7 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
   qdisc_qstats_backlog_inc(sch, skb);
   sch->q.qlen++;
-  printk(KERN_INFO "qlen %d", sch->q.qlen);
+  pr_info("[sch_bundle_inbox] qlen %d", sch->q.qlen);
   return NET_XMIT_SUCCESS;
 }
 
@@ -375,7 +375,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       q->ptokens = ptoks;
       qdisc_qstats_backlog_dec(sch, skb);
       sch->q.qlen--;
-      printk(KERN_INFO "qlen %d", sch->q.qlen);
+      pr_info("[sch_bundle_inbox] qlen %d", sch->q.qlen);
       qdisc_bstats_update(sch, skb);
       return skb;
     }
@@ -427,7 +427,7 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch) {
   struct Qdisc *q;
   int err = -ENOMEM;
 
-  printk(KERN_INFO "using fq_codel!");
+  pr_info("[bunde_inbox_init] using fq_codel!");
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_codel_qdisc_ops,
       TC_H_MAKE(sch->handle, 1));
@@ -554,7 +554,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   memcpy(&q->rate, &rate, sizeof(struct psched_ratecfg));
   memcpy(&q->peak, &peak, sizeof(struct psched_ratecfg));
 
-  pr_info("rate %llu\n", *((u64*) &rate));
+  pr_info("[sch_bundle_inbox] rate %llu\n", *((u64*) &rate));
 
   sch_tree_unlock(sch);
   err = 0;
@@ -580,7 +580,7 @@ void tbf_nl_recv_msg(struct sk_buff *skb) {
 
     memcpy(&msg, nlmsg_data(nlh), sizeof(struct QDiscUpdateMsg));
     if (msg.sample_rate != 0) {
-        pr_info("[sch_bundle_inbox] sample_rate %u\n", msg.sample_rate);
+        pr_info("[sch_bundle_inbox] epoch_len %u\n", msg.sample_rate);
         sch_bundle_inbox_q->epoch_sample_rate = msg.sample_rate;
     }
     return;
@@ -607,11 +607,11 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
 
 	q->nl_sock = netlink_kernel_create(&init_net, NETLINK_USERSOCK, &cfg);
 	if (!q->nl_sock) {
-		printk(KERN_INFO "bundle_inbox: error creating netlink socket\n");
+		printk(KERN_INFO "bundle_inbox_init: error creating netlink socket\n");
 		return -EINVAL;
 	}
 
-	printk(KERN_INFO "bundle_inbox: created netlink socket\n");
+	printk(KERN_INFO "bundle_inbox_init: created netlink socket\n");
 
   return tbf_change(sch, opt);
 }
