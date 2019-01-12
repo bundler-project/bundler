@@ -68,6 +68,7 @@ struct fq_codel_sched_data {
   u32    drop_overmemory;
   u32    drop_overlimit;
   u32    new_flow_count;
+  u32    num_backlogged_flows;
 
   struct list_head new_flows;  /* list of new flows */
   struct list_head old_flows;  /* list of old flows */
@@ -205,12 +206,17 @@ static int fq_codel_enqueue(struct sk_buff *skb, struct Qdisc *sch,
   }
   idx--;
 
+  // set metadata
   codel_set_enqueue_time(skb);
+  // get pointer to the flow queue
   flow = &q->flows[idx];
+  // add skb to the flow queue
   flow_queue_add(flow, skb);
+  // update per-flow packet counters
   q->backlogs[idx] += qdisc_pkt_len(skb);
   qdisc_qstats_backlog_inc(sch, skb);
 
+  // add this flows flowchain to new_flows
   if (list_empty(&flow->flowchain)) {
     list_add_tail(&flow->flowchain, &q->new_flows);
     q->new_flow_count++;
@@ -293,20 +299,27 @@ static struct sk_buff *fq_codel_dequeue(struct Qdisc *sch)
   u32 prev_drop_count, prev_ecn_mark;
 
 begin:
+  // start by trying to dequeue a new flow
   head = &q->new_flows;
   if (list_empty(head)) {
+    // if no new flows look through old flows 
     head = &q->old_flows;
     if (list_empty(head))
+      // if no old flows, nothing to dequeue
       return NULL;
   }
+  // get head of the queue
   flow = list_first_entry(head, struct fq_codel_flow, flowchain);
 
+  // if this flow can't send yet, update its credits and move on to the next flow
   if (flow->deficit <= 0) {
     flow->deficit += q->quantum;
     list_move_tail(&flow->flowchain, &q->old_flows);
     goto begin;
   }
 
+  // we've found a flow with enough credits to send 
+  //
   prev_drop_count = q->cstats.drop_count;
   prev_ecn_mark = q->cstats.ecn_mark;
 
@@ -475,6 +488,7 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
   codel_stats_init(&q->cstats);
   q->cparams.ecn = true;
   q->cparams.mtu = psched_mtu(qdisc_dev(sch));
+  q->num_backlogged_flows = 0;
 
   if (opt) {
     int err = fq_codel_change(sch, opt);

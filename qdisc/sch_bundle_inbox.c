@@ -25,12 +25,26 @@
 #include <linux/netlink.h>
 #include <linux/version.h>
 
-#ifdef __USE_FQ_CODEL__
-#include "sch_fq_codel.c"
+#define FIFO 1
+#define FQ_CODEL 2
+#define FQ 3
+#define SFQ 4
+
+#ifndef QTYPE
+#error QTYPE must be defined
 #endif
 
-#define NEW_KERNEL LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+#if QTYPE == FIFO
+#elif QTYPE == FQ_CODEL
+#include "sch_fq_codel.c"
+#elif QTYPE == FQ
+#include "sch_fq.c"
+#elif QTYPE == SFQ
+#include "sch_sfq.c"
+#endif
 
+
+#define NEW_KERNEL LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 
 /*  Simple Token Bucket Filter.
   =======================================
@@ -426,19 +440,43 @@ static const struct nla_policy tbf_policy[TCA_TBF_MAX + 1] = {
   [TCA_TBF_PBURST] = { .type = NLA_U32 }
 };
 
-#ifdef __USE_FQ_CODEL__
-struct Qdisc *create_inner_qdisc(struct Qdisc *sch) {
+struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   struct Qdisc *q;
   int err = -ENOMEM;
 
-  pr_info("[bunde_inbox_init] using fq_codel!");
+#if QTYPE == FIFO
+  pr_info("[bunde_inbox_init] inner_queue_type bfifo");
+  q = fifo_create_dflt(sch, &bfifo_qdisc_ops, qopt->limit);
+#elif QTYPE == FQ_CODEL
+  pr_info("[bunde_inbox_init] inner_queue_type fq_codel");
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_codel_qdisc_ops,
       TC_H_MAKE(sch->handle, 1));
+#elif QTYPE == FQ
+  pr_info("[bunde_inbox_init] inner_queue_type fq");
+  q = qdisc_create_dflt(sch->dev_queue,
+      &fq_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+#elif QTYPE == SFQ
+  pr_info("[bunde_inbox_init] inner_queue_type sfq");
+  q = qdisc_create_dflt(sch->dev_queue,
+      &sfq_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+#endif
 
   return q ? : ERR_PTR(err);
 }
+
+int update_inner_qdisc_limit(struct Qdisc *q, unsigned int limit) {
+#if QTYPE == FIFO
+  return fifo_set_limit(q, limit);
+#elif QTYPE == FQ_CODEL
+  // TODO
+#elif QTYPE == FQ
+#elif QTYPE == SFQ
 #endif
+  return 0;
+}
 
 static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
 {
@@ -517,18 +555,11 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
   }
 
   if (q->qdisc != &noop_qdisc) {
-#ifdef __USE_FQ_CODEL__
-#else
-    err = fifo_set_limit(q->qdisc, qopt->limit);
+    err = update_inner_qdisc_limit(q->qdisc, qopt->limit);
     if (err)
       goto done;
-#endif
   } else if (qopt->limit > 0) {
-#ifdef __USE_FQ_CODEL__
-    child = create_inner_qdisc(sch);
-#else
-    child = fifo_create_dflt(sch, &bfifo_qdisc_ops, qopt->limit);
-#endif
+    child = create_inner_qdisc(sch, qopt);
     if (IS_ERR(child)) {
       err = PTR_ERR(child);
       goto done;
