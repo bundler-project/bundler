@@ -21,6 +21,7 @@
 #include <net/netlink.h>
 #include <net/sch_generic.h>
 #include <net/pkt_sched.h>
+#include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/netlink.h>
 #include <linux/version.h>
@@ -332,15 +333,27 @@ fnv_64_buf(void *buf, size_t len, Fnv64_t hval)
     return hval;
 }
 
+/*
 static uint32_t hash_packet(void *buf, size_t buflength) {
     return (uint32_t) fnv_64_buf(buf, buflength, FNV1_64_INIT);
+}
+*/
+
+static uint32_t hash_header(void *ips, void *ports, void *ipid) {
+  uint32_t hash = 0;
+  hash = fnv_64_buf(ips, 8, FNV1_64_INIT);
+  hash = fnv_64_buf(ports, 4, hash);
+  hash = fnv_64_buf(ipid, 2, hash);
+  return hash;
 }
 
 static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
 {
   struct tbf_sched_data *q = qdisc_priv(sch);
   struct sk_buff *skb;
-	struct tcphdr *hdr; 
+  struct iphdr *ip_header;
+	struct tcphdr *tcp_header; 
+  uint32_t hash;
 
   skb = q->qdisc->ops->peek(q->qdisc);
 
@@ -372,9 +385,11 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
 			q->epoch_bytes_sent += len;
 			q->epoch_pkts_sent += skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
 
-      hdr = (struct tcphdr *)skb_transport_header(skb);
-      if (hdr) { 
-          uint32_t hash = hash_packet(&hdr->seq, sizeof(u32));
+      tcp_header = (struct tcphdr *)skb_transport_header(skb);
+      if (tcp_header) { 
+          // uint32_t hash = hash_packet(&hdr->seq, sizeof(u32));
+          ip_header = (struct iphdr *)skb_network_header(skb);
+          hash = hash_header(&(ip_header->saddr), tcp_header, &(ip_header->id));
           if (hash % q->epoch_sample_rate == 0) {
               struct FeedbackMsg fmsg = {
                   .bundle_id = 42,
