@@ -1,4 +1,5 @@
 extern crate bundler;
+extern crate bytes;
 extern crate clap;
 extern crate time;
 
@@ -18,20 +19,69 @@ use std::thread;
 const MAC_HEADER_LENGTH: usize = 14;
 const IP_HEADER_LENGTH: usize = 20;
 // Locations in headers
-const PROTO_IN_IP_HEADER: usize = 10;
-const SEQ_IN_TCP_HEADER: usize = 5;
+const PROTO_IN_IP_HEADER: usize = 9;
 // Values
 const IP_PROTO_TCP: u8 = 6;
-const SEQ_LENGTH: usize = 4;
-// Locations from beginning of packet
-const SEQ: usize = MAC_HEADER_LENGTH + IP_HEADER_LENGTH + SEQ_IN_TCP_HEADER - 1;
-const PROTO: usize = MAC_HEADER_LENGTH + PROTO_IN_IP_HEADER - 1;
 
-fn hash_packet(buf: &[u8]) -> u32 {
+/// TCP Header
+///    0                   1                   2                   3
+///    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |          Source Port          |       Destination Port        |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                        Sequence Number                        |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                    Acknowledgment Number                      |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |  Data |           |U|A|P|R|S|F|                               |
+///   | Offset| Reserved  |R|C|S|S|Y|I|            Window             |
+///   |       |           |G|K|H|T|N|N|                               |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |           Checksum            |         Urgent Pointer        |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                    Options                    |    Padding    |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                             data                              |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///
+/// IP Header
+///
+///    0                   1                   2                   3
+///    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |Version|  IHL  |Type of Service|          Total Length         |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |         Identification        |Flags|      Fragment Offset    |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |  Time to Live |    Protocol   |         Header Checksum       |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                       Source Address                          |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                    Destination Address                        |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                    Options                    |    Padding    |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///
+/// Pseudo-header for packet hashing:
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                       Source Address (ipv4 header)            |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                    Destination Address (ipv4 header)          |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |       Source Port (tcp hdr)   | Destination Port (tcp hdr)    |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |      Identification (ipv4 hdr)|
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+fn hash_packet(ip_header_start: usize, tcp_header_start: usize, pkt: &[u8]) -> u32 {
     use fnv;
     use std::hash::Hasher;
     let mut h = fnv::FnvHasher::default();
-    h.write(buf);
+    let src_dst_ip = &pkt[ip_header_start + 12..ip_header_start + 20];
+    let src_dst_port = &pkt[tcp_header_start..tcp_header_start + 8];
+    let ipid = &pkt[ip_header_start + 4..ip_header_start + 6];
+    h.write(src_dst_ip);
+    h.write(src_dst_port);
+    h.write(ipid);
     h.finish() as u32
 }
 
@@ -66,7 +116,7 @@ fn main() {
             Arg::with_name("inbox")
                 .long("inbox")
                 .help("address of inbox")
-                .takes_value(true)
+                .takes_value(true),
         )
         .arg(
             Arg::with_name("no_ethernet")
@@ -83,17 +133,10 @@ fn main() {
     let filter = matches.value_of("filter").unwrap();
     let mut sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
     let no_ethernet = matches.is_present("no_ethernet");
-    let proto_offset = if no_ethernet {
-        PROTO - MAC_HEADER_LENGTH
-    } else {
-        PROTO
-    };
-    let seq_offset = if no_ethernet {
-        SEQ - MAC_HEADER_LENGTH
-    } else {
-        SEQ
-    };
-    
+
+    let ip_header_start = if no_ethernet { 0 } else { MAC_HEADER_LENGTH };
+    let tcp_header_start = ip_header_start + IP_HEADER_LENGTH;
+
     let devs = Device::list().unwrap();
     let dev = devs.into_iter().find(|dev| dev.name == iface);
     let mut cap = Capture::from_device(dev.unwrap())
@@ -141,7 +184,6 @@ fn main() {
             .expect("failed to send on UDP socket");
     });
 
-
     let mut bytes_recvd: u64 = 0;
     let mut last_bytes_recvd: u64 = 0;
     let mut r1: u64 = 0;
@@ -184,7 +226,7 @@ fn main() {
                 let data = pkt.data;
 
                 // Is this a TCP packet?
-                if data[proto_offset] != IP_PROTO_TCP {
+                if data[ip_header_start + PROTO_IN_IP_HEADER] != IP_PROTO_TCP {
                     continue;
                 }
 
@@ -193,10 +235,8 @@ fn main() {
                     bytes_recvd += MAC_HEADER_LENGTH as u64;
                 }
 
-                // Extract the sequence number and hash it
-                let hash = hash_packet(
-                    &data[seq_offset..(seq_offset + SEQ_LENGTH)]
-                );
+                let hash = hash_packet(ip_header_start, tcp_header_start, data);
+
                 // If hash ends in X zeros, "mark" it
                 if hash % sample_rate == 0 {
                     let r2 = now;
@@ -206,6 +246,7 @@ fn main() {
                         let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
                         info!(log, "outbox epoch";
                             "recv_rate" => recv_epoch_bytes / recv_epoch_seconds,
+                            "hash" => hash,
                         );
                     }
 
