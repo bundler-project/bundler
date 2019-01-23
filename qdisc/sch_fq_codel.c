@@ -378,6 +378,7 @@ static void fq_codel_reset(struct Qdisc *sch)
   q->memory_usage = 0;
 }
 
+
 static const struct nla_policy fq_codel_policy[TCA_FQ_CODEL_MAX + 1] = {
   [TCA_FQ_CODEL_TARGET]  = { .type = NLA_U32 },
   [TCA_FQ_CODEL_LIMIT]  = { .type = NLA_U32 },

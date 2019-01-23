@@ -31,6 +31,8 @@
 #define FQ 3
 #define SFQ 4
 
+#define FQ_CODEL_TARGET 7000
+
 #ifndef QTYPE
 #error QTYPE must be defined
 #endif
@@ -457,6 +459,9 @@ static const struct nla_policy tbf_policy[TCA_TBF_MAX + 1] = {
 
 struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   struct Qdisc *q;
+#if QTYPE == FQ_CODEL
+  struct fq_codel_sched_data *codel_q = qdisc_priv(sch);
+#endif
   int err = -ENOMEM;
 
 #if QTYPE == FIFO
@@ -467,6 +472,7 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_codel_qdisc_ops,
       TC_H_MAKE(sch->handle, 1));
+  codel_q->cparams.target = (FQ_CODEL_TARGET * NSEC_PER_USEC) >> CODEL_SHIFT;
 #elif QTYPE == FQ
   pr_info("[bunde_inbox_init] inner_queue_type fq");
   q = qdisc_create_dflt(sch->dev_queue,
@@ -681,6 +687,11 @@ static int tbf_dump(struct Qdisc *sch, struct sk_buff *skb)
   struct tbf_sched_data *q = qdisc_priv(sch);
   struct nlattr *nest;
   struct tc_tbf_qopt opt;
+
+#if QTYPE == FQ_CODEL
+  struct fq_codel_sched_data *codel_q = qdisc_priv(sch);
+  pr_info("fq_codel_target=%d", codel_time_to_us(codel_q->cparams.target));
+#endif
 
   //printk(KERN_INFO "bundle_inbox: dump\n");
   sch->qstats.backlog = q->qdisc->qstats.backlog;
