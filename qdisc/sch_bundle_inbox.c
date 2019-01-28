@@ -30,8 +30,7 @@
 #define FQ_CODEL 2
 #define FQ 3
 #define SFQ 4
-
-#define FQ_CODEL_TARGET 7000
+#define PRIO 5
 
 #ifndef QTYPE
 #error QTYPE must be defined
@@ -44,6 +43,8 @@
 #include "sch_fq.c"
 #elif QTYPE == SFQ
 #include "sch_sfq.c"
+#elif QTYPE == PRIO
+#include "sch_prio.c"
 #endif
 
 
@@ -303,7 +304,9 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
   qdisc_qstats_backlog_inc(sch, skb);
   sch->q.qlen++;
 #ifdef __VERBOSE_LOGGING__
+#if QTYPE != PRIO
   pr_info("[sch_bundle_inbox] qlen %d", sch->q.qlen);
+#endif
 #endif
   return NET_XMIT_SUCCESS;
 }
@@ -343,8 +346,8 @@ static uint32_t hash_packet(void *buf, size_t buflength) {
 
 static uint32_t hash_header(void *ips, void *ports, void *ipid) {
   uint32_t hash = 0;
-  //hash = fnv_64_buf(ips, 8, FNV1_64_INIT);
-  hash = fnv_64_buf(ports, 2, FNV1_64_INIT); // 4 to include dst port
+  hash = fnv_64_buf(ips, 8, FNV1_64_INIT);
+  hash = fnv_64_buf(ports, 4, hash);
   hash = fnv_64_buf(ipid, 2, hash);
   return hash;
 }
@@ -409,7 +412,9 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       qdisc_qstats_backlog_dec(sch, skb);
       sch->q.qlen--;
 #ifdef __VERBOSE_LOGGING__
+#if QTYPE != PRIO
       pr_info("[sch_bundle_inbox] qlen %d", sch->q.qlen);
+#endif
 #endif
       qdisc_bstats_update(sch, skb);
       return skb;
@@ -459,9 +464,6 @@ static const struct nla_policy tbf_policy[TCA_TBF_MAX + 1] = {
 
 struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   struct Qdisc *q;
-#if QTYPE == FQ_CODEL
-  struct fq_codel_sched_data *codel_q = qdisc_priv(sch);
-#endif
   int err = -ENOMEM;
 
 #if QTYPE == FIFO
@@ -472,7 +474,6 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_codel_qdisc_ops,
       TC_H_MAKE(sch->handle, 1));
-  codel_q->cparams.target = (FQ_CODEL_TARGET * NSEC_PER_USEC) >> CODEL_SHIFT;
 #elif QTYPE == FQ
   pr_info("[bunde_inbox_init] inner_queue_type fq");
   q = qdisc_create_dflt(sch->dev_queue,
@@ -482,6 +483,11 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   pr_info("[bunde_inbox_init] inner_queue_type sfq");
   q = qdisc_create_dflt(sch->dev_queue,
       &sfq_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+#elif QTYPE == PRIO
+  pr_info("[bunde_inbox_init] inner_queue_type prio");
+  q = qdisc_create_dflt(sch->dev_queue,
+      &prio_qdisc_ops,
       TC_H_MAKE(sch->handle, 1));
 #endif
 
@@ -495,6 +501,7 @@ int update_inner_qdisc_limit(struct Qdisc *q, unsigned int limit) {
   // TODO
 #elif QTYPE == FQ
 #elif QTYPE == SFQ
+#elif QTYPE == PRIO
 #endif
   return 0;
 }
@@ -688,11 +695,6 @@ static int tbf_dump(struct Qdisc *sch, struct sk_buff *skb)
   struct nlattr *nest;
   struct tc_tbf_qopt opt;
 
-#if QTYPE == FQ_CODEL
-  struct fq_codel_sched_data *codel_q = qdisc_priv(sch);
-  pr_info("fq_codel_target=%d", codel_time_to_us(codel_q->cparams.target));
-#endif
-
   //printk(KERN_INFO "bundle_inbox: dump\n");
   sch->qstats.backlog = q->qdisc->qstats.backlog;
   nest = nla_nest_start(skb, TCA_OPTIONS);
@@ -805,16 +807,9 @@ static struct Qdisc_ops tbf_qdisc_ops __read_mostly = {
 static int __init tbf_module_init(void)
 {
 	printk(KERN_INFO "bundle_inbox: init\n");
-#if QTYPE == FIFO
-    pr_info("using fifo\n");
-#elif QTYPE == FQ_CODEL
-    pr_info("using fq-codel\n");
-#elif QTYPE == FQ
-    pr_info("using fq\n");
-#elif QTYPE == SFQ
-    pr_info("using sfq\n");
+#ifdef __USE_FQ_CODEL__
+  printk(KERN_INFO "using FQ_CODEL");
 #endif
-
 #ifdef __VERBOSE_LOGGING__
   printk(KERN_INFO "logging instantaneous queue lengths");
 #endif

@@ -2,7 +2,7 @@ TARGET = sch_bundle_inbox
 #sch_bundle_inbox-objs := sch_bundle_inbox.o # sch_fq_codel.o
 
 ifndef QTYPE
-    $(error QTYPE not set. may be one of [fifo|fq_codel|fq|sfq])
+    $(error QTYPE not set. may be one of [fifo|fq_codel|fq|sfq|prio])
 endif
 ifeq ($(QTYPE), fifo)
 	FLAGS = -DQTYPE=1
@@ -15,6 +15,9 @@ ifeq ($(QTYPE), fq)
 endif
 ifeq ($(QTYPE), sfq)
 	FLAGS = -DQTYPE=4
+endif
+ifeq ($(QTYPE), prio)
+    	FLAGS = -DQTYPE=5
 endif
 
 VERBOSE_LOGGING = n
