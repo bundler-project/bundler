@@ -8,6 +8,7 @@ use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use slog;
 use slog::info;
+use std::cmp::min;
 
 pub struct Qdisc {
     logger: slog::Logger,
@@ -18,6 +19,7 @@ pub struct Qdisc {
     outbox_addr: Option<std::net::SocketAddr>,
     outbox_found: std::sync::mpsc::Receiver<std::net::SocketAddr>,
     rtt_ns: u64,
+    min_rtt_ns: u64,
     observed_sending_bytes_per_sec: u64,
     rate_bytes_per_sec: u32,
     cwnd_bytes: u32,
@@ -83,6 +85,7 @@ impl Qdisc {
                 outbox_addr: None,
                 outbox_found: outbox_found_rx,
                 rtt_ns: 0x3fff_ffff,
+                min_rtt_ns: 0x3fff_ffff,
                 observed_sending_bytes_per_sec: 0x3fff_ffff,
                 rate_bytes_per_sec: 0x3fff_ffff,
                 cwnd_bytes: 0x3fff_ffff,
@@ -121,6 +124,10 @@ impl Qdisc {
             return Ok(());
         }
 
+        if self.curr_epoch_length == epoch_length_packets {
+            return Ok(());
+        }
+
         info!(self.logger, "adjust_epoch";
             "curr" => self.curr_epoch_length,
             "new" => epoch_length_packets,
@@ -150,6 +157,7 @@ impl Qdisc {
 
     pub fn update_rtt(&mut self, rtt_ns: u64) -> Result<(), ()> {
         self.rtt_ns = rtt_ns;
+        self.min_rtt_ns = min(self.min_rtt_ns, rtt_ns);
         self.__set_rate()
     }
 
@@ -157,7 +165,7 @@ impl Qdisc {
         self.observed_sending_bytes_per_sec = observed_sending_bytes_per_sec;
         let epoch_length = get_epoch_length(
             self.observed_sending_bytes_per_sec as f64,
-            self.rtt_ns as f64 / 1e9,
+            self.min_rtt_ns as f64 / 1e9,
         );
         self.set_epoch_length(epoch_length).unwrap_or_else(|_| ());
     }
