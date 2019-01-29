@@ -346,8 +346,8 @@ static uint32_t hash_packet(void *buf, size_t buflength) {
 
 static uint32_t hash_header(void *ips, void *ports, void *ipid) {
   uint32_t hash = 0;
-  hash = fnv_64_buf(ips, 8, FNV1_64_INIT);
-  hash = fnv_64_buf(ports, 4, hash);
+  //hash = fnv_64_buf(ips, 8, FNV1_64_INIT);
+  hash = fnv_64_buf(ports, 2, FNV1_64_INIT);
   hash = fnv_64_buf(ipid, 2, hash);
   return hash;
 }
