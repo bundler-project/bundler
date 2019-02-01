@@ -174,6 +174,7 @@ impl Qdisc {
         let rtt_sec = self.rtt_ns as f64 / 1e9;
         let cwnd_effective_rate = self.cwnd_bytes as f64 / rtt_sec;
         let rate = std::cmp::min(self.rate_bytes_per_sec, cwnd_effective_rate as u32);
+
         if rate == self.curr_set_rate {
             return Ok(());
         }
@@ -187,7 +188,12 @@ impl Qdisc {
 
         unsafe {
             // TODO set burst dynamically
-            rtnl_qdisc_tbf_set_rate(self.qdisc, rate as i32, 100_000, 0);
+            rtnl_qdisc_tbf_set_rate(
+                self.qdisc,
+                if rate > 125_000 { rate as i32 } else { 125_000 },
+                100_000,
+                0,
+            );
             let ret = rtnl_qdisc_add(self.rtnl_sock, self.qdisc, NLM_F_REPLACE as i32);
             if ret < 0 {
                 return Err(());
