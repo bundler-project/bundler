@@ -47,8 +47,12 @@ use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
 extern "C" fn bundler_set_cwnd(
     dp: *mut ccp::ccp_datapath,
     _conn: *mut ccp::ccp_connection,
-    cwnd: u32,
+    mut cwnd: u32,
 ) {
+    if cwnd == 0 {
+        cwnd = 15_000;
+    }
+
     let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
     unsafe {
         (*dp)
@@ -345,7 +349,7 @@ impl Runtime {
         info!(log, "Initialize bundle flow in libccp");
         // TODO this is a hack, we are pretending there is only one bundle/flow
         let mut dp_info = ccp::ccp_datapath_info {
-            init_cwnd: 10,
+            init_cwnd: 15_000,
             mss: 1514,
             src_ip: 0,
             src_port: 42,
