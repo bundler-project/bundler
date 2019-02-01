@@ -3,7 +3,7 @@
 ETH=10gp1
 TC_DIR=/home/`whoami`/bundler/qdisc/iproute2/tc
 SPORT=28316
-SIP=10.1.1.2
+SIP=`ip addr show $ETH | grep -oP 'inet \K\S[0-9.]+'`
 LIMIT=$2
 
 echo "=> remove qdisc"
@@ -13,7 +13,7 @@ echo "=> remove module"
 sudo rmmod sch_bundle_inbox
 
 echo "=> make $1"
-make QTYPE=$1 || exit
+make QTYPE=$1 VERBOSE_LOGGING=n || exit
 
 echo "=> insmod"
 sudo insmod sch_bundle_inbox.ko || exit
