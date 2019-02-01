@@ -9,7 +9,7 @@ use pcap::{Capture, Device};
 use bundler::serialize;
 use bundler::serialize::OutBoxFeedbackMsg;
 
-use slog::info;
+use slog::{debug, info};
 use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -76,10 +76,10 @@ fn hash_packet(ip_header_start: usize, tcp_header_start: usize, pkt: &[u8]) -> u
     use fnv;
     use std::hash::Hasher;
     let mut h = fnv::FnvHasher::default();
-    let src_dst_ip = &pkt[ip_header_start + 12..ip_header_start + 20];
-    let src_dst_port = &pkt[tcp_header_start..tcp_header_start + 8];
+    //let src_dst_ip = &pkt[ip_header_start + 12..ip_header_start + 20];
+    let src_dst_port = &pkt[tcp_header_start..tcp_header_start + 2];
     let ipid = &pkt[ip_header_start + 4..ip_header_start + 6];
-    h.write(src_dst_ip);
+    //h.write(src_dst_ip);
     h.write(src_dst_port);
     h.write(ipid);
     h.finish() as u32
@@ -187,6 +187,7 @@ fn main() {
     let mut bytes_recvd: u64 = 0;
     let mut last_bytes_recvd: u64 = 0;
     let mut r1: u64 = 0;
+    let mut pkts: u64 = 0;
 
     let (s, r) = mpsc::channel();
     thread::spawn(move || {
@@ -237,21 +238,33 @@ fn main() {
 
                 let hash = hash_packet(ip_header_start, tcp_header_start, data);
 
+                pkts += 1;
+
                 // If hash ends in X zeros, "mark" it
                 if hash % sample_rate == 0 {
                     let r2 = now;
                     tx.send((r2, hash, bytes_recvd)).unwrap();
+                    debug!(log, "outbox hash";
+                        "ip" => ?&data[ip_header_start + 12..ip_header_start+20],
+                        "ports" => ?&data[tcp_header_start..tcp_header_start+4],
+                        "ipid" => ?&data[ip_header_start+4..ip_header_start+6],
+                        "hash" => hash,
+                    );
+
                     if r1 != 0 {
                         let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
                         let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
                         info!(log, "outbox epoch";
                             "recv_rate" => recv_epoch_bytes / recv_epoch_seconds,
-                            "hash" => hash,
+                            "recv_epoch_bytes" => recv_epoch_bytes,
+                            "recv_epoch_ns" => (r2 - r1),
+                            "recv_epoch_packet_count" => pkts,
                         );
                     }
 
                     r1 = r2;
                     last_bytes_recvd = bytes_recvd;
+                    pkts = 0;
                 }
             }
             _ => {}
