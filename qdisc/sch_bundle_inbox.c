@@ -794,9 +794,16 @@ static struct Qdisc_ops tbf_qdisc_ops __read_mostly = {
 static int __init tbf_module_init(void)
 {
 	printk(KERN_INFO "bundle_inbox: init\n");
-#ifdef __USE_FQ_CODEL__
-  printk(KERN_INFO "using FQ_CODEL");
+#if QTYPE == FIFO
+    pr_info("using fifo\n");
+#elif QTYPE == FQ_CODEL
+    pr_info("using fq-codel\n");
+#elif QTYPE == FQ
+    pr_info("using fq\n");
+#elif QTYPE == SFQ
+    pr_info("using sfq\n");
 #endif
+
 #ifdef __VERBOSE_LOGGING__
   printk(KERN_INFO "logging instantaneous queue lengths");
 #endif
