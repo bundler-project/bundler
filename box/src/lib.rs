@@ -153,6 +153,7 @@ fn round_down_power_of_2(x: u32) -> u32 {
     }
 }
 
+/// Calculate and maintain flow measurements.
 #[derive(Default)]
 struct BundleFlowState {
     conn: Option<*mut ccp::ccp_connection>,
@@ -169,31 +170,31 @@ struct BundleFlowState {
     rtt_estimate: u64,
 
     bdp_estimate_packets: u32,
-
+    acked_bytes: u32, // estimate with number of received packets in last epoch
     lost_bytes: u32,
 }
 
 impl BundleFlowState {
-    //
-    // s1  |\   A       |
-    //     | -------    |
-    //     |    B   \   |
-    // s2  |\-----   ---| r1
-    //     |      \ /   |
-    //     | -------    |
-    // s1' |/   A'  \---| r2
-    //     |        /   |
-    //     | -------    |
-    // s2' |/   B'      |
-    //
-    //
-    // RTT = s2' - s2 = NOW - s2
-    // send epoch = s1 -> s2
-    // recv epoch = r1 -> r2
-    // r1 available with s1'
-    // r2 available with s2'
-    //
-    // We are currently at s2'.
+    ///
+    /// s1  |\   A       |
+    ///     | -------    |
+    ///     |    B   \   |
+    /// s2  |\-----   ---| r1
+    ///     |      \ /   |
+    ///     | -------    |
+    /// s1' |/   A'  \---| r2
+    ///     |        /   |
+    ///     | -------    |
+    /// s2' |/   B'      |
+    ///
+    ///
+    /// RTT = s2' - s2 = NOW - s2
+    /// send epoch = s1 -> s2
+    /// recv epoch = r1 -> r2
+    /// r1 available with s1'
+    /// r2 available with s2'
+    ///
+    /// We are currently at s2'.
     fn update_measurements(
         &mut self,
         now: u64,
@@ -237,7 +238,7 @@ impl BundleFlowState {
         let rtt_s = self.rtt_estimate as f64 / 1e9;
         let bdp_estimate_bytes = send_rate as f64 * rtt_s;
         self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
-
+        self.acked_bytes = recv_epoch_bytes as u32;
         let delta = send_epoch_bytes.saturating_sub(recv_epoch_bytes);
         self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
 
@@ -246,6 +247,27 @@ impl BundleFlowState {
         self.prev_send_byte_clock = s2_bytes;
         self.prev_recv_time = r2;
         self.prev_recv_byte_clock = r2_bytes;
+
+        self.update_primitives()
+    }
+
+    fn did_invoke(&mut self) {
+        self.acked_bytes = 0;
+        self.lost_bytes = 0;
+        self.update_primitives()
+    }
+
+    fn update_primitives(&self) {
+        let conn = self.conn.unwrap();
+        // set primitives
+        unsafe {
+            (*conn).prims.rtt_sample_us = self.rtt_estimate / 1_000;
+            (*conn).prims.rate_outgoing = self.send_rate as u64;
+            (*conn).prims.rate_incoming = self.recv_rate as u64;
+            (*conn).prims.bytes_acked = self.acked_bytes;
+            (*conn).prims.packets_acked = self.acked_bytes / 1514;
+            (*conn).prims.lost_pkts_sample = self.lost_bytes / 1514;
+        }
     }
 }
 
@@ -392,7 +414,12 @@ impl minion::Cancellable for Runtime {
                     // so we can get its RTT later
                     // TODO -- this might need to get the current time instead of using the
                     // kernel's
-                    debug!(self.log, "inbox epoch"; "time" => msg.epoch_time, "bytes" => msg.epoch_bytes);
+                    debug!(self.log, "inbox epoch";
+                        "time" => msg.epoch_time,
+                        "bytes" => msg.epoch_bytes,
+                        "hash" => msg.marked_packet_hash,
+                    );
+
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                 }
             },
@@ -401,6 +428,7 @@ impl minion::Cancellable for Runtime {
                     // check packet marking
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
+                        let h = msg.marked_packet_hash;
                         self.flow_state.update_measurements(now, mi, msg);
                         {
                             let mut q = self.qdisc.borrow_mut();
@@ -408,19 +436,12 @@ impl minion::Cancellable for Runtime {
                             q.update_send_rate(self.flow_state.send_rate as u64);
                         }
 
-                        let conn = self.flow_state.conn.unwrap();
-                        // set primitives
-                        unsafe {
-                            (*conn).prims.rtt_sample_us = self.flow_state.rtt_estimate / 1_000;
-                            (*conn).prims.rate_outgoing = self.flow_state.send_rate as u64;
-                            (*conn).prims.rate_incoming = self.flow_state.recv_rate as u64;
-                            (*conn).prims.lost_pkts_sample = self.flow_state.lost_bytes / 1514;
-                        }
-
                         debug!(self.log, "new measurements";
-                              "rtt" => self.flow_state.rtt_estimate / 1_000,
-                              "rate_outgoing" => self.flow_state.send_rate as u64,
-                              "rate_incoming" => self.flow_state.recv_rate as u64,
+                            "now" => now,
+                            "hash" => h,
+                            "rtt" => self.flow_state.rtt_estimate / 1_000,
+                            "rate_outgoing" => self.flow_state.send_rate as u64,
+                            "rate_incoming" => self.flow_state.recv_rate as u64,
                         );
 
                         self.ready_to_invoke = true;
@@ -435,6 +456,7 @@ impl minion::Cancellable for Runtime {
                           "rtt" => unsafe { (*conn).prims.rtt_sample_us },
                           "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
                           "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
+                          "acked" => unsafe { (*conn).prims.packets_acked },
                           "lost_pkts_sample" => unsafe { (*conn).prims.lost_pkts_sample },
                     );
 
@@ -443,6 +465,9 @@ impl minion::Cancellable for Runtime {
                     if ok < 0 {
                         warn!(self.log, "CCP Invoke Error"; "code" => ok);
                     }
+
+                    // reset measurements
+                    self.flow_state.did_invoke();
 
                     // after ccp_invoke, qdisc might have changed epoch_length
                     // due to new rate being set.
