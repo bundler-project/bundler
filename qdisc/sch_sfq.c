@@ -26,6 +26,8 @@
 #include <net/pkt_cls.h>
 #include <net/red.h>
 
+#ifndef SCH_SFQ_HACK
+#define SCH_SFQ_HACK
 
 /*  Stochastic Fairness Queuing algorithm.
   =======================================
@@ -919,3 +921,5 @@ static struct Qdisc_ops sfq_qdisc_ops __read_mostly = {
   .dump    =  sfq_dump,
   .owner    =  THIS_MODULE,
 };
+
+#endif

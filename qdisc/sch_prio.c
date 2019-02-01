@@ -23,6 +23,7 @@
 #include <net/pkt_cls.h>
 #include <linux/byteorder/generic.h>
 
+#include "sch_sfq.c"
 
 #define NUM_QUEUES 2
 
@@ -203,7 +204,10 @@ static int prio_simple(struct Qdisc *sch) {
   int i=0;
 
   for (i=0; i<NUM_QUEUES; i++) {
-    queues[i] = qdisc_create_dflt(sch->dev_queue, &pfifo_qdisc_ops, TC_H_MAKE(sch->handle, i+1));
+    queues[i] = qdisc_create_dflt(sch->dev_queue,
+          &sfq_qdisc_ops,
+          TC_H_MAKE(sch->handle, i+1));
+    //qdisc_create_dflt(sch->dev_queue, &pfifo_qdisc_ops, TC_H_MAKE(sch->handle, i+1));
     if (!queues[i]) {
       return -ENOMEM;
     }
