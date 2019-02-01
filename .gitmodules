@@ -1,12 +1,9 @@
 [submodule "libccp"]
-	path = box/libccp
+	path = libccp
 	url = https://github.com/ccp-project/libccp
 [submodule "libnl"]
-	path = box/libnl
+	path = libnl
 	url = git@github.com:ccp-project/libnl
 [submodule "qdisc/iproute2"]
 	path = qdisc/iproute2
 	url = https://github.com/ccp-project/iproute2.git
-[submodule "scripts/empiricial-traffic-gen"]
-	path = scripts/empiricial-traffic-gen
-	url = https://github.com/ccp-project/empiricial-traffic-gen
