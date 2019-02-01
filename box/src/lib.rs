@@ -200,6 +200,7 @@ impl BundleFlowState {
         now: u64,
         sent_mark: marks::MarkedInstant,
         recv_mark: OutBoxFeedbackMsg,
+        logger: &slog::Logger,
     ) {
         let s1 = self.prev_send_time;
         let s1_bytes = self.prev_send_byte_clock;
@@ -234,6 +235,14 @@ impl BundleFlowState {
 
         self.send_rate = send_rate;
         self.recv_rate = recv_rate;
+
+        info!(logger, "epochs";
+            "send_epoch_bytes" => send_epoch_bytes,
+            "send_epoch_ns" => send_epoch_ns,
+            "recv_epoch_bytes" => recv_epoch_bytes,
+            "recv_epoch_ns" => recv_epoch_ns,
+            "epoch_window" => self.epoch_history.window,
+        );
 
         let rtt_s = self.rtt_estimate as f64 / 1e9;
         let bdp_estimate_bytes = send_rate as f64 * rtt_s;
@@ -416,8 +425,8 @@ impl minion::Cancellable for Runtime {
                     // kernel's
                     debug!(self.log, "inbox epoch";
                         "time" => msg.epoch_time,
-                        "bytes" => msg.epoch_bytes,
                         "hash" => msg.marked_packet_hash,
+                        "bytes" => msg.epoch_bytes,
                     );
 
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
@@ -429,7 +438,7 @@ impl minion::Cancellable for Runtime {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         let h = msg.marked_packet_hash;
-                        self.flow_state.update_measurements(now, mi, msg);
+                        self.flow_state.update_measurements(now, mi, msg, &self.log);
                         {
                             let mut q = self.qdisc.borrow_mut();
                             q.update_rtt(self.flow_state.rtt_estimate).unwrap_or_else(|_| ());
@@ -445,6 +454,10 @@ impl minion::Cancellable for Runtime {
                         );
 
                         self.ready_to_invoke = true;
+                    } else {
+                        debug!(self.log, "no match";
+                            "hash" => msg.marked_packet_hash,
+                        );
                     }
                 }
             },
