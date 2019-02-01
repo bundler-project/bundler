@@ -31,6 +31,8 @@
 #define FQ 3
 #define SFQ 4
 #define PRIO 5
+#define FQ_CODEL_TARGET (1 * 1000)
+#define FQ_CODEL_CETHRESH (5 * 1000)
 
 #ifndef QTYPE
 #error QTYPE must be defined
@@ -474,6 +476,8 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt) {
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_codel_qdisc_ops,
       TC_H_MAKE(sch->handle, 1));
+  //codel_q->cparams.target = (FQ_CODEL_TARGET * NSEC_PER_USEC) >> CODEL_SHIFT;
+  //codel_q->cparams.ce_threshold = (FQ_CODEL_CETHRESH * NSEC_PER_USEC) >> CODEL_SHIFT;
 #elif QTYPE == FQ
   pr_info("[bunde_inbox_init] inner_queue_type fq");
   q = qdisc_create_dflt(sch->dev_queue,
