@@ -75,7 +75,7 @@
 
   It is easy to increase these values, but not in flight.  */
 
-#define SFQ_MAX_DEPTH    127 /* max number of packets per flow */
+#define SFQ_MAX_DEPTH    511 /* max number of packets per flow */
 #define SFQ_DEFAULT_FLOWS  128
 #define SFQ_MAX_FLOWS    (0x10000 - SFQ_MAX_DEPTH - 1) /* max number of flows */
 #define SFQ_EMPTY_SLOT    0xffff
@@ -119,10 +119,10 @@ struct sfq_sched_data {
   int    limit;    /* limit of total number of packets in this qdisc */
   unsigned int  divisor;  /* number of slots in hash table */
   u8    headdrop;
-  u8    maxdepth;  /* limit of packets per flow */
+  u16    maxdepth;  /* limit of packets per flow */
 
   u32    perturbation;
-  u8    cur_depth;  /* depth of longest slot */
+  u16    cur_depth;  /* depth of longest slot */
   u8    flags;
   unsigned short  scaled_quantum; /* SFQ_ALLOT_SIZE(quantum) */
   struct tcf_proto __rcu *filter_list;
