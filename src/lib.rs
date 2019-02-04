@@ -9,6 +9,7 @@
 extern crate bytes;
 extern crate crossbeam;
 extern crate failure;
+extern crate libccp;
 extern crate minion;
 extern crate portus;
 extern crate slog;
@@ -16,18 +17,12 @@ extern crate slog;
 use crossbeam::select;
 use minion::Cancellable;
 use portus::Result;
-use slog::{debug, info, warn};
+use slog::{debug, info};
 use std::os::unix::net::UnixDatagram;
 
 pub mod serialize;
 use self::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 pub mod udp;
-
-#[allow(non_upper_case_globals)]
-#[allow(non_camel_case_types)]
-#[allow(non_snake_case)]
-#[allow(unused)]
-mod ccp;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
@@ -44,119 +39,64 @@ use self::marks::{Epoch, EpochHistory, MarkHistory};
 mod readers;
 use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
 
-extern "C" fn bundler_set_cwnd(
-    dp: *mut ccp::ccp_datapath,
-    _conn: *mut ccp::ccp_connection,
-    mut cwnd: u32,
-) {
-    if cwnd == 0 {
-        cwnd = 15_000;
-    }
-
-    let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe {
-        (*dp)
-            .qdisc
-            .borrow_mut()
-            .set_approx_cwnd(cwnd)
-            .unwrap_or_else(|_| ())
-    };
-}
-
-extern "C" fn bundler_set_rate_abs(
-    dp: *mut ccp::ccp_datapath,
-    _conn: *mut ccp::ccp_connection,
-    rate: u32,
-) {
-    let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe {
-        (*dp)
-            .qdisc
-            .borrow_mut()
-            .set_rate(rate)
-            .unwrap_or_else(|_| ())
-    };
-}
-
-extern "C" fn bundler_set_rate_rel(
-    _dp: *mut ccp::ccp_datapath,
-    _conn: *mut ccp::ccp_connection,
-    _rate: u32,
-) {
-    // no-op
-    // TODO: support enforcing a relative rate
-    // can probably deprecate this in libccp
-    unimplemented!();
-}
-
-extern "C" fn bundler_send_msg(
-    dp: *mut ccp::ccp_datapath,
-    _conn: *mut ccp::ccp_connection,
-    msg: *mut ::std::os::raw::c_char,
-    msg_size: ::std::os::raw::c_int,
-) -> std::os::raw::c_int {
-    // construct the slice
-    use std::slice;
-    let buf = unsafe { slice::from_raw_parts(msg as *mut u8, msg_size as usize) };
-
-    let dp: *mut DatapathImpl = unsafe { std::mem::transmute((*dp).impl_) };
-    unsafe {
-        match (*dp).sk.send_to(buf, "/tmp/ccp/0/in") {
-            Err(ref e)
-                if e.kind() == std::io::ErrorKind::NotFound
-                    || e.kind() == std::io::ErrorKind::ConnectionRefused =>
-            {
-                if (*dp).connected {
-                    eprintln!("warn: unix socket does not exist...");
-                }
-                (*dp).connected = false;
-                Ok(())
-            }
-            Err(e) => Err(e),
-            Ok(_) => {
-                if !(*dp).connected {
-                    eprintln!("info: unix socket connected!");
-                }
-                (*dp).connected = true;
-                Ok(())
-            }
-        }
-        .unwrap();
-    };
-    return 0;
-}
-
-extern "C" fn bundler_now() -> u64 {
-    time::precise_time_ns()
-}
-
-extern "C" fn bundler_since_usecs(then: u64) -> u64 {
-    (time::precise_time_ns() - then) / 1_000
-}
-
-extern "C" fn bundler_after_usecs(usecs: u64) -> u64 {
-    time::precise_time_ns() + usecs * 1_000
-}
-
 struct DatapathImpl {
-    qdisc: Rc<RefCell<Qdisc>>, // qdisc handle
     sk: UnixDatagram,
     connected: bool,
 }
 
-fn round_down_power_of_2(x: u32) -> u32 {
-    let y = x.leading_zeros();
-    if y >= 32 {
-        0
-    } else {
-        1 << (32 - y - 1)
+impl libccp::DatapathOps for DatapathImpl {
+    fn send_msg(&mut self, msg: &[u8]) {
+        // construct the slice
+        match self.sk.send_to(msg, "/tmp/ccp/0/in") {
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
+                if self.connected {
+                    eprintln!("warn: unix socket does not exist...");
+                }
+                self.connected = false;
+                Ok(())
+            }
+            Err(e) => Err(e),
+            Ok(_) => {
+                if !self.connected {
+                    eprintln!("info: unix socket connected!");
+                }
+                self.connected = true;
+                Ok(())
+            }
+        }
+        .unwrap();
+    }
+}
+
+struct ConnectionImpl {
+    qdisc: Rc<RefCell<Qdisc>>, // qdisc handle
+}
+
+impl libccp::CongestionOps for ConnectionImpl {
+    fn set_cwnd(&mut self, cwnd: u32) {
+        let set = if cwnd == 0 { 15_000 } else { cwnd };
+
+        self.qdisc
+            .borrow_mut()
+            .set_approx_cwnd(set)
+            .unwrap_or_else(|_| ())
+    }
+
+    fn set_rate_abs(&mut self, rate: u32) {
+        self.qdisc
+            .borrow_mut()
+            .set_rate(rate)
+            .unwrap_or_else(|_| ())
     }
 }
 
 /// Calculate and maintain flow measurements.
 #[derive(Default)]
-struct BundleFlowState {
-    conn: Option<*mut ccp::ccp_connection>,
+struct BundleFlowState<'dp> {
+    conn: Option<libccp::Connection<'dp, ConnectionImpl>>,
     marked_packets: MarkHistory,
     epoch_history: EpochHistory,
 
@@ -174,7 +114,7 @@ struct BundleFlowState {
     lost_bytes: u32,
 }
 
-impl BundleFlowState {
+impl<'dp> BundleFlowState<'dp> {
     ///
     /// s1  |\   A       |
     ///     | -------    |
@@ -266,16 +206,18 @@ impl BundleFlowState {
         self.update_primitives()
     }
 
-    fn update_primitives(&self) {
-        let conn = self.conn.unwrap();
+    fn update_primitives(&mut self) {
         // set primitives
-        unsafe {
-            (*conn).prims.rtt_sample_us = self.rtt_estimate / 1_000;
-            (*conn).prims.rate_outgoing = self.send_rate as u64;
-            (*conn).prims.rate_incoming = self.recv_rate as u64;
-            (*conn).prims.bytes_acked = self.acked_bytes;
-            (*conn).prims.packets_acked = self.acked_bytes / 1514;
-            (*conn).prims.lost_pkts_sample = self.lost_bytes / 1514;
+        if let Some(c) = self.conn.as_mut() {
+            c.load_primitives(
+                libccp::Primitives::default()
+                    .with_rate_outgoing(self.send_rate as u64)
+                    .with_rate_incoming(self.recv_rate as u64)
+                    .with_rtt_sample_us(self.rtt_estimate / 1_000)
+                    .with_bytes_acked(self.acked_bytes)
+                    .with_packets_acked(self.acked_bytes / 1514)
+                    .with_lost_pkts_sample(self.lost_bytes / 1514),
+            );
         }
     }
 }
@@ -283,17 +225,32 @@ impl BundleFlowState {
 use crossbeam::tick;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct Runtime {
     log: slog::Logger,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
-    /// flow measurements
-    flow_state: BundleFlowState,
+    // Do not allow a reference to flow_state to escape.
+    // Doing so would be unsafe, because the lifetime is
+    // declared as 'static when it is actually the same
+    // as the lifetime of Arc<libccp::Datapath>.
+    flow_state: BundleFlowState<'static>,
     qdisc: Rc<RefCell<Qdisc>>,
     invoke_ticker: crossbeam::Receiver<Instant>,
     ready_to_invoke: bool,
+    // Must come last. Since Drop on libccp::Datapath frees
+    // libccp state, if Runtime is ever Dropped then this must
+    // be dropped last.
+    // See https://github.com/rust-lang/rfcs/blob/master/text/1857-stabilize-drop-order.md
+    // for drop order documentation.
+    datapath: Arc<libccp::Datapath>,
+}
+
+// This prevents `Runtime` from being destructured, which could cause `flow_state` to escape.
+impl Drop for Runtime {
+    fn drop(&mut self) {}
 }
 
 impl Runtime {
@@ -328,9 +285,6 @@ impl Runtime {
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
         let _outbox_recv_handle = outbox_reader.spawn();
 
-        let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone());
-        let _portus_reader_handle = portus_reader.spawn();
-
         // unix socket for sending *to* portus
         let portus_sk = UnixDatagram::unbound().unwrap();
 
@@ -349,28 +303,14 @@ impl Runtime {
 
         let dpi = DatapathImpl {
             sk: portus_sk,
-            qdisc: qdisc.clone(),
             connected: true,
         };
 
-        let dpi = Box::new(dpi);
+        let dp = libccp::Datapath::init(dpi).unwrap();
+        let dp = Arc::new(dp);
 
-        let mut dp = ccp::ccp_datapath {
-            set_cwnd: Some(bundler_set_cwnd),
-            set_rate_abs: Some(bundler_set_rate_abs),
-            set_rate_rel: Some(bundler_set_rate_rel),
-            time_zero: time::precise_time_ns(),
-            now: Some(bundler_now),
-            since_usecs: Some(bundler_since_usecs),
-            after_usecs: Some(bundler_after_usecs),
-            send_msg: Some(bundler_send_msg),
-            impl_: Box::into_raw(dpi) as *mut std::os::raw::c_void,
-        };
-
-        let ok = unsafe { ccp::ccp_init(&mut dp) };
-        if ok < 0 {
-            return None;
-        }
+        let (portus_reader, alg_ready) = UnixMsgReader::make(log.clone(), dp.clone());
+        let _portus_reader_handle = portus_reader.spawn();
 
         // Wait for algorithm to finish installing datapath programs
         info!(log, "Wait for CCP to install datapath program");
@@ -378,19 +318,26 @@ impl Runtime {
 
         info!(log, "Initialize bundle flow in libccp");
         // TODO this is a hack, we are pretending there is only one bundle/flow
-        let mut dp_info = ccp::ccp_datapath_info {
-            init_cwnd: 15_000,
-            mss: 1514,
-            src_ip: 0,
-            src_port: 42,
-            dst_ip: 0,
-            dst_port: 0,
-            congAlg: [0i8; 64],
-        };
+        let dp_info = libccp::FlowInfo::default()
+            .with_init_cwnd(15_000)
+            .with_mss(1514)
+            .with_four_tuple(0, 0, 0, 0);
 
-        let conn = unsafe {
-            ccp::ccp_connection_start(std::ptr::null_mut::<std::os::raw::c_void>(), &mut dp_info)
-        };
+        // Why the mem::transmute you ask?
+        // This is necessary because the correct lifetime is *self-referential*.
+        // It is safe in this case because:
+        // (1) libccp::Datapath::init(/*..*/) is inside an Arc, and at least one copy of that Arc is inside Runtime
+        // (2) this libccp::Connection is inside BundleFlowState, which is also inside Runtime.
+        // (3) Therefore, libccp::Connection is valid for the lifetime of Runtime, which is
+        // effectively 'static.
+        let conn = libccp::Connection::start(
+            unsafe { std::mem::transmute(dp.as_ref()) },
+            ConnectionImpl {
+                qdisc: qdisc.clone(),
+            },
+            dp_info,
+        )
+        .unwrap();
 
         let mut fs: BundleFlowState = Default::default();
         fs.conn = Some(conn);
@@ -407,6 +354,7 @@ impl Runtime {
             qdisc,
             invoke_ticker,
             ready_to_invoke: false,
+            datapath: dp,
         })
     }
 }
@@ -462,21 +410,19 @@ impl minion::Cancellable for Runtime {
             },
             recv(self.invoke_ticker) -> _ => {
                 if self.ready_to_invoke {
-                    let conn = self.flow_state.conn.unwrap();
+                    let conn = self.flow_state.conn.as_mut().unwrap();
 
+                    let prims = conn.primitives(&self.datapath);
                     info!(self.log, "CCP Invoke";
-                          "rtt" => unsafe { (*conn).prims.rtt_sample_us },
-                          "rate_outgoing" => unsafe { (*conn).prims.rate_outgoing },
-                          "rate_incoming" => unsafe { (*conn).prims.rate_incoming },
-                          "acked" => unsafe { (*conn).prims.packets_acked },
-                          "lost_pkts_sample" => unsafe { (*conn).prims.lost_pkts_sample },
+                          "rtt" => prims.0.rtt_sample_us,
+                          "rate_outgoing" => prims.0.rate_outgoing,
+                          "rate_incoming" => prims.0.rate_incoming,
+                          "acked" => prims.0.packets_acked,
+                          "lost_pkts_sample" => prims.0.lost_pkts_sample,
                     );
 
                     // ccp_invoke
-                    let ok = unsafe { ccp::ccp_invoke(conn) };
-                    if ok < 0 {
-                        warn!(self.log, "CCP Invoke Error"; "code" => ok);
-                    }
+                    conn.invoke().unwrap_or_else(|_| ());
 
                     // reset measurements
                     self.flow_state.did_invoke();
@@ -499,5 +445,14 @@ impl minion::Cancellable for Runtime {
         };
 
         Ok(minion::LoopState::Continue)
+    }
+}
+
+fn round_down_power_of_2(x: u32) -> u32 {
+    let y = x.leading_zeros();
+    if y >= 32 {
+        0
+    } else {
+        1 << (32 - y - 1)
     }
 }

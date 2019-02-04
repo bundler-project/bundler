@@ -1,4 +1,3 @@
-use crate::ccp;
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 use crate::udp;
 use minion::Cancellable;
@@ -56,16 +55,22 @@ impl Cancellable for UdpMsgReader {
     }
 }
 
+use std::sync::Arc;
+
 pub struct UnixMsgReader(
     UnixDatagram,
     Vec<u8>,
     crossbeam::Sender<()>,
     u32,
     slog::Logger,
+    Arc<libccp::Datapath>,
 );
 
 impl UnixMsgReader {
-    pub fn make(logger: slog::Logger) -> (Self, crossbeam::Receiver<()>) {
+    pub fn make(
+        logger: slog::Logger,
+        dp: Arc<libccp::Datapath>,
+    ) -> (Self, crossbeam::Receiver<()>) {
         let addr = "/tmp/ccp/0/out";
 
         match std::fs::create_dir_all("/tmp/ccp/0").err() {
@@ -86,7 +91,7 @@ impl UnixMsgReader {
 
         let (send, recv) = crossbeam::bounded(0);
 
-        let s = UnixMsgReader(sock, vec![0u8; 1024], send, 0, logger);
+        let s = UnixMsgReader(sock, vec![0u8; 1024], send, 0, logger, dp);
         (s, recv)
     }
 }
@@ -97,12 +102,12 @@ impl Cancellable for UnixMsgReader {
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
         let bytes_read = self.0.recv(&mut self.1[..])?;
 
-        // cast the vec in self to a *mut c_char
-        let buf = self.1.as_mut_ptr() as *mut ::std::os::raw::c_char;
-        let ok = unsafe { ccp::ccp_read_msg(buf, bytes_read as i32) };
-        if ok < 0 {
-            warn!(self.4, "ccp_read_msg error"; "code" => ok);
-        }
+        self.5
+            .recv_msg(&mut self.1[..bytes_read])
+            .map_err(|e| {
+                warn!(self.4, "ccp_read_msg error"; "code" => ?e);
+            })
+            .unwrap_or_else(|_| ());
 
         self.3 += 1;
         if self.3 == 1 {
