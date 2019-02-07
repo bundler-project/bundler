@@ -298,6 +298,7 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(
+        log: slog::Logger,
         listen_port: u16,
         outbox: Option<String>,
         iface: String,
@@ -307,8 +308,6 @@ impl Runtime {
     ) -> Option<Self> {
         use portus::ipc;
         use portus::ipc::netlink;
-
-        let log = portus::algs::make_logger();
 
         let nlsk = netlink::Socket::<ipc::Blocking>::new().unwrap();
         let (qdisc_reader, qdisc_recv) = NlMsgReader::make(nlsk);

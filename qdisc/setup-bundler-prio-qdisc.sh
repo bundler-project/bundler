@@ -6,6 +6,9 @@ INBOX_SPORT=28316
 INBOX_SIP=10.1.1.2
 LIMIT=$1
 
+echo "Script deprecated. This functionality is now included in the inbox application."
+exit 1
+
 echo "=> remove qdisc"
 sudo env TC_LIB_DIR=$TC_DIR tc qdisc del dev $ETH root
 

@@ -3,8 +3,13 @@
 ETH=10gp1
 TC_DIR=/home/`whoami`/bundler/qdisc/iproute2/tc
 SPORT=28316
-SIP=`ip addr show $ETH | grep -oP 'inet \K\S[0-9.]+'`
+SIP=`ip addr show $ETH | grep -oP 'inet \K\S[0-9.]+' | head -n 1`
 LIMIT=$2
+
+echo "Script deprecated. This functionality is now included in the inbox application."
+exit 1
+
+echo "=> found IP=$SIP"
 
 echo "=> remove qdisc"
 sudo env TC_LIB_DIR=$TC_DIR tc qdisc del dev $ETH root
