@@ -134,7 +134,12 @@ fn setup_qdisc(
     if verbose {
         make.arg("VERBOSE_LOGGING=y");
     }
-    make.output().expect(&format!("make QTYPE={}", qtype));
+
+    let out = make.output().expect(&format!("make QTYPE={}", qtype));
+    if !out.status.success() {
+        warn!(logger, "qdisc make failed");
+        println!("{}", std::str::from_utf8(&out.stdout).unwrap());
+    }
 
     Command::new("sudo")
         .arg("insmod")
