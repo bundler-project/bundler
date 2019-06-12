@@ -661,12 +661,13 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
 	};
   sch_bundle_inbox_q = q;
 
-  if (opt == NULL)
-    return -EINVAL;
-
   q->t_c = ktime_get_ns();
   qdisc_watchdog_init(&q->watchdog, sch);
   q->qdisc = &noop_qdisc;
+
+  if (opt == NULL) {
+    return -EINVAL;
+  }
 
   q->epoch_sample_rate = PACKET_SAMPLE_RATE;
 	q->epoch_bytes_sent = 0;
@@ -679,7 +680,6 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	printk(KERN_INFO "bundle_inbox_init: created netlink socket\n");
-
   return tbf_change(sch, opt);
 }
 
@@ -688,6 +688,7 @@ static void tbf_destroy(struct Qdisc *sch)
   struct tbf_sched_data *q = qdisc_priv(sch);
   if (q->nl_sock) {
     netlink_kernel_release(q->nl_sock);
+    q->nl_sock = NULL;
   }
   qdisc_watchdog_cancel(&q->watchdog);
   qdisc_destroy(q->qdisc);
