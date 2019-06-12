@@ -5,9 +5,9 @@ extern crate minion;
 use bundler::Runtime;
 use clap::{value_t, App, Arg};
 use minion::Cancellable;
-use slog::{warn};
+use slog::warn;
+use std::path::PathBuf;
 use std::process::Command;
-use std::path::{PathBuf};
 
 use regex::Regex;
 
@@ -24,13 +24,19 @@ fn lookup_qdisc(logger: &slog::Logger, iface: &str) -> Option<u32> {
         if caps.is_some() {
             return Some(u32::from_str_radix(caps.unwrap().get(1).unwrap().as_str(), 16).unwrap());
         } else {
-            warn!(logger, "qdisc show did not match pattern 'qdisc bundle_inbox [0-9a-f]{{4}} parent 1:2'");
+            warn!(
+                logger,
+                "qdisc show did not match pattern 'qdisc bundle_inbox [0-9a-f]{{4}} parent 1:2'"
+            );
         }
     } else {
-        warn!(logger, "qdisc show failed with exit code {}", qdisc_show.status.code().unwrap());
+        warn!(
+            logger,
+            "qdisc show failed with exit code {}",
+            qdisc_show.status.code().unwrap()
+        );
     }
     return None;
-
 }
 
 fn get_iface_ip(logger: &slog::Logger, iface: &str) -> Option<String> {
@@ -43,16 +49,30 @@ fn get_iface_ip(logger: &slog::Logger, iface: &str) -> Option<String> {
 
     if ip_addr.status.success() {
         let ip_addr_out = String::from_utf8_lossy(&ip_addr.stdout);
-        let re = Regex::new(&format!("{}{}", r"inet ([0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}).*", iface)).unwrap();
+        let re = Regex::new(&format!(
+            "{}{}",
+            r"inet ([0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}).*", iface
+        ))
+        .unwrap();
         let caps = re.captures(&ip_addr_out);
         if caps.is_some() {
             return Some(caps.unwrap().get(1).unwrap().as_str().to_owned());
         } else {
-            warn!(logger, "ip addr show did not match pattern '{}'",
-                  format!("{}{}", r"inet ([0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}).*", iface));
+            warn!(
+                logger,
+                "ip addr show did not match pattern '{}'",
+                format!(
+                    "{}{}",
+                    r"inet ([0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}).*", iface
+                )
+            );
         }
     } else {
-        warn!(logger, "ip addr show failed with exit code {}", ip_addr.status.code().unwrap());
+        warn!(
+            logger,
+            "ip addr show failed with exit code {}",
+            ip_addr.status.code().unwrap()
+        );
     }
     return None;
 }
@@ -64,23 +84,22 @@ fn setup_qdisc(
     verbose: bool,
     matches: clap::ArgMatches,
 ) -> (u32, u32) {
-
-
     if matches.is_present("keep_qdisc") {
         let major_handle = lookup_qdisc(logger, iface);
         if major_handle.is_some() {
-            return (major_handle.unwrap(), 0)
+            return (major_handle.unwrap(), 0);
         }
         warn!(logger, "Cannot find bundler qdisc, attempting to reinstall");
     }
 
-    let qtype: &str = matches.value_of("qtype").expect("Must provide qtype when installing qdisc");
-    let buffer: &str = matches.value_of("buffer").expect("Must provide buffer size when installing qdisc");
+    let qtype: &str = matches
+        .value_of("qtype")
+        .expect("Must provide qtype when installing qdisc");
+    let buffer: &str = matches
+        .value_of("buffer")
+        .expect("Must provide buffer size when installing qdisc");
 
-    let qdisc_root_dir: PathBuf = [
-        env!("CARGO_MANIFEST_DIR"),
-        "qdisc",
-    ].iter().collect();
+    let qdisc_root_dir: PathBuf = [env!("CARGO_MANIFEST_DIR"), "qdisc"].iter().collect();
 
     let tc_lib_dir = matches.value_of("tc_lib_dir").map_or_else(|| {
         let dir: PathBuf = [
@@ -110,8 +129,7 @@ fn setup_qdisc(
         .expect("rmmod");
 
     let mut make = Command::new("make");
-        make
-        .arg(format!("QTYPE={}",qtype))
+    make.arg(format!("QTYPE={}", qtype))
         .current_dir(&qdisc_root_dir);
     if verbose {
         make.arg("VERBOSE_LOGGING=y");
@@ -126,27 +144,60 @@ fn setup_qdisc(
         .expect("insmod");
 
     Command::new("sudo")
-        .args(&["tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio", "bands", "3"])
+        .args(&[
+            "tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio", "bands", "3",
+        ])
         .output()
         .expect("tc qdisc add root prio");
 
     Command::new("sudo")
-        .args(&["tc", "qdisc", "add", "dev", iface, "parent", "1:1", "pfifo_fast"])
+        .args(&[
+            "tc",
+            "qdisc",
+            "add",
+            "dev",
+            iface,
+            "parent",
+            "1:1",
+            "pfifo_fast",
+        ])
         .output()
         .expect("tc qdisc add child pfifo");
 
-
     let sip = match matches.value_of("sip") {
         Some(ip) => ip.to_owned(),
-        None => get_iface_ip(logger, iface).expect("failed to find iface ip")
+        None => get_iface_ip(logger, iface).expect("failed to find iface ip"),
     };
     Command::new("sudo")
-        .args(&["tc", "filter", "add", "dev", iface, "parent", "1:",
-              "protocol", "ip", "prio", "1", "u32",                      // give priority 1 (highest)
-              "match", "ip", "protocol", "17", "0xff",                   // match UDP
-              "match", "ip", "sport", &self_port.to_string(), "0xffff",  // match inbox feedback source port
-              "match", "ip", "src", &sip,                                // match inbox feedback source ip
-              "flowid", "1:1"                                            // send to child 1 (pfifo_fast)
+        .args(&[
+            "tc",
+            "filter",
+            "add",
+            "dev",
+            iface,
+            "parent",
+            "1:",
+            "protocol",
+            "ip",
+            "prio",
+            "1",
+            "u32", // give priority 1 (highest)
+            "match",
+            "ip",
+            "protocol",
+            "17",
+            "0xff", // match UDP
+            "match",
+            "ip",
+            "sport",
+            &self_port.to_string(),
+            "0xffff", // match inbox feedback source port
+            "match",
+            "ip",
+            "src",
+            &sip, // match inbox feedback source ip
+            "flowid",
+            "1:1", // send to child 1 (pfifo_fast)
         ])
         .output()
         .expect("tc filter self -> pfifo");
@@ -154,8 +205,22 @@ fn setup_qdisc(
     Command::new("sudo")
         .env("TC_LIB_DIR", &tc_lib_dir)
         .arg("-E")
-        .args(&["tc", "qdisc", "add", "dev", iface, "parent", "1:2", "bundle_inbox",
-              "rate", "100mbit", "burst", "1mbit", "limit", buffer])
+        .args(&[
+            "tc",
+            "qdisc",
+            "add",
+            "dev",
+            iface,
+            "parent",
+            "1:2",
+            "bundle_inbox",
+            "rate",
+            "100mbit",
+            "burst",
+            "1mbit",
+            "limit",
+            buffer,
+        ])
         .output()
         .expect("tc qdisc add child bundler");
 
@@ -163,7 +228,7 @@ fn setup_qdisc(
     if major_handle.is_none() {
         panic!("Failed to find qdisc");
     } else {
-        return (major_handle.unwrap(), 0)
+        return (major_handle.unwrap(), 0);
     }
 }
 
@@ -262,13 +327,7 @@ fn main() {
 
     let verbose = matches.is_present("verbose");
 
-    let (handle_major, handle_minor) = setup_qdisc(
-        &log,
-        &iface,
-        listen_port,
-        verbose,
-        matches
-    );
+    let (handle_major, handle_minor) = setup_qdisc(&log, &iface, listen_port, verbose, matches);
 
     let mut r = Runtime::new(
         log,
