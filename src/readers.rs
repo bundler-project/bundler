@@ -28,7 +28,7 @@ impl Cancellable for NlMsgReader {
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
         self.0.recv(&mut self.1[0..100])?;
-        let m = QDiscFeedbackMsg::from_slice(&self.1[0..24]);
+        let m = QDiscFeedbackMsg::from_slice(&self.1[0..32]);
         self.2.send(m)?;
         Ok(minion::LoopState::Continue)
     }

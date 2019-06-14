@@ -223,10 +223,10 @@ mod tests {
     #[test]
     fn test_round() {
         let x: f64 = 2.0 * 270.0;
-        assert_eq!(super::round_down_power_of_2(x as u32), 512);
-        assert_eq!(super::round_down_power_of_2(538), 512);
-        assert_eq!(super::round_down_power_of_2(16), 16);
-        assert_eq!(super::round_down_power_of_2(1), 1);
-        assert_eq!(super::round_down_power_of_2(0), 0);
+        assert_eq!(crate::round_down_power_of_2(x as u32), 512);
+        assert_eq!(crate::round_down_power_of_2(538), 512);
+        assert_eq!(crate::round_down_power_of_2(16), 16);
+        assert_eq!(crate::round_down_power_of_2(1), 1);
+        assert_eq!(crate::round_down_power_of_2(0), 0);
     }
 }

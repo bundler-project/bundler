@@ -135,6 +135,7 @@
 struct __attribute__((packed, aligned(4))) FeedbackMsg {
 	u32 bundle_id;
 	u32 marked_packet_hash;
+    u32 curr_qlen;
 	u64 epoch_bytes_sent;
 	u64 now;
 };
@@ -401,6 +402,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
               struct FeedbackMsg fmsg = {
                   .bundle_id = 42,
                   .marked_packet_hash = hash,
+                  .curr_qlen = sch->q.qlen,
                   .epoch_bytes_sent = q->epoch_bytes_sent,
                   .now = now,
               };

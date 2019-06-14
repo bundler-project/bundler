@@ -112,6 +112,8 @@ struct BundleFlowState<'dp> {
     bdp_estimate_packets: u32,
     acked_bytes: u32, // estimate with number of received packets in last epoch
     lost_bytes: u32,
+
+    curr_qlen: u32,
 }
 
 impl<'dp> BundleFlowState<'dp> {
@@ -216,7 +218,8 @@ impl<'dp> BundleFlowState<'dp> {
                     .with_rtt_sample_us(self.rtt_estimate / 1_000)
                     .with_bytes_acked(self.acked_bytes)
                     .with_packets_acked(self.acked_bytes / 1514)
-                    .with_lost_pkts_sample(self.lost_bytes / 1514),
+                    .with_lost_pkts_sample(self.lost_bytes / 1514)
+                    .with_bytes_pending(self.curr_qlen), // quick hack
             );
         }
     }
@@ -374,9 +377,11 @@ impl minion::Cancellable for Runtime {
                         "time" => msg.epoch_time,
                         "hash" => msg.marked_packet_hash,
                         "bytes" => msg.epoch_bytes,
+                        "curr_qlen" => msg.curr_qlen,
                     );
 
                     self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
+                    self.flow_state.curr_qlen = msg.curr_qlen;
                 }
             },
             recv(self.outbox_recv) -> msg => {
