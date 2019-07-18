@@ -833,14 +833,27 @@ static struct Qdisc_ops tbf_qdisc_ops __read_mostly = {
 
 static int __init tbf_module_init(void)
 {
-	printk(KERN_INFO "bundle_inbox: init\n");
-#ifdef __USE_FQ_CODEL__
-  printk(KERN_INFO "using FQ_CODEL");
+    int ok = register_qdisc(&tbf_qdisc_ops);
+    if (ok < 0) {
+        pr_info("bundle_inbox: register_qdisc failed: %d\n", ok);
+        return ok;
+    }
+
+#if QTYPE == FIFO
+	pr_info("bundle_inbox: fifo\n");
+#elif QTYPE == FQ_CODEL
+	pr_info("bundle_inbox: fq_codel\n");
+#elif QTYPE == SFQ
+	pr_info("bundle_inbox: sfq\n");
+#elif QTYPE == PRIO
+	pr_info("bundle_inbox: prio\n");
 #endif
+
 #ifdef __VERBOSE_LOGGING__
   printk(KERN_INFO "logging instantaneous queue lengths");
 #endif
-  return register_qdisc(&tbf_qdisc_ops);
+
+  return ok;
 }
 
 static void __exit tbf_module_exit(void)
