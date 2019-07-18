@@ -5,6 +5,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn main() {
+    std::process::Command::new("./build_tc.sh")
+        .current_dir("./qdisc")
+        .spawn()
+        .expect("build_tc");
+
     println!("cargo:rustc-link-lib=nfnetlink");
 
     if !Path::new("./libnl/lib/.libs/libnl-genl-3.a").exists() {
