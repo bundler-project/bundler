@@ -5,7 +5,7 @@ extern crate minion;
 use bundler::Runtime;
 use clap::{value_t, App, Arg};
 use minion::Cancellable;
-use slog::warn;
+use slog::{error, info, warn};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -84,6 +84,7 @@ fn setup_qdisc(
     verbose: bool,
     matches: clap::ArgMatches,
 ) -> (u32, u32) {
+    info!(logger, "Installing bundler qdisc"; "interface" => iface);
     if matches.is_present("keep_qdisc") {
         let major_handle = lookup_qdisc(logger, iface);
         if major_handle.is_some() {
@@ -148,14 +149,24 @@ fn setup_qdisc(
         .output()
         .expect("insmod");
 
-    Command::new("sudo")
+    info!(logger, "Loaded qdisc kernel module");
+
+    let ok = Command::new("sudo")
         .args(&[
             "tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio", "bands", "3",
         ])
         .output()
         .expect("tc qdisc add root prio");
 
-    Command::new("sudo")
+    if !ok.status.success() {
+        let stdout = std::str::from_utf8(&ok.stdout).unwrap();
+        let stderr = std::str::from_utf8(&ok.stderr).unwrap();
+        println!("{}", stdout);
+        println!("{}", stderr);
+        error!(logger, "tc qdisc add root prio");
+    }
+
+    let ok = Command::new("sudo")
         .args(&[
             "tc",
             "qdisc",
@@ -169,10 +180,20 @@ fn setup_qdisc(
         .output()
         .expect("tc qdisc add child pfifo");
 
+    if !ok.status.success() {
+        let stdout = std::str::from_utf8(&ok.stdout).unwrap();
+        let stderr = std::str::from_utf8(&ok.stderr).unwrap();
+        println!("{}", stdout);
+        println!("{}", stderr);
+        error!(logger, "tc qdisc add root prio");
+    }
+
     let sip = match matches.value_of("sip") {
         Some(ip) => ip.to_owned(),
         None => get_iface_ip(logger, iface).expect("failed to find iface ip"),
     };
+
+    info!(logger, "Reset qdisc"; "ip" => &sip);
     Command::new("sudo")
         .args(&[
             "tc",
@@ -207,7 +228,7 @@ fn setup_qdisc(
         .output()
         .expect("tc filter self -> pfifo");
 
-    Command::new("sudo")
+    let ok = Command::new("sudo")
         .env("TC_LIB_DIR", &tc_lib_dir)
         .arg("-E")
         .args(&[
@@ -228,6 +249,13 @@ fn setup_qdisc(
         ])
         .output()
         .expect("tc qdisc add child bundler");
+    if !ok.status.success() {
+        let stdout = std::str::from_utf8(&ok.stdout).unwrap();
+        let stderr = std::str::from_utf8(&ok.stderr).unwrap();
+        println!("{}", stdout);
+        println!("{}", stderr);
+        error!(logger, "tc qdisc add child bundler");
+    }
 
     let major_handle = lookup_qdisc(logger, iface);
     if major_handle.is_none() {
