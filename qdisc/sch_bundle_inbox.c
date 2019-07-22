@@ -38,7 +38,7 @@
 #error QTYPE must be defined
 #endif
 
-#if LINUX_VERSION_CODE == KERNEL_VERSION(4,15,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
  #if QTYPE == FIFO
  #elif QTYPE == FQ_CODEL
  #include "4.15/sch_fq_codel.c"
@@ -47,7 +47,7 @@
  #elif QTYPE == PRIO
  #include "4.15/sch_prio.c"
  #endif
-#elif LINUX_VERSION_CODE == KERNEL_VERSION(4,19,0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
  #if QTYPE == FIFO
  #elif QTYPE == FQ_CODEL
  #include "4.19/sch_fq_codel.c"
@@ -56,6 +56,9 @@
  #elif QTYPE == PRIO
  #include "4.19/sch_prio.c"
  #endif
+#else 
+#pragma message "kernel version unsupported"
+#error
 #endif
 
 /*  Simple Token Bucket Filter.
@@ -462,41 +465,73 @@ static const struct nla_policy tbf_policy[TCA_TBF_MAX + 1] = {
   [TCA_TBF_PBURST] = { .type = NLA_U32 }
 };
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
 struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt,
               struct netlink_ext_ack *extack)
+#endif
 {
   struct Qdisc *q;
   int err = -ENOMEM;
 
 #if QTYPE == FIFO
   pr_info("[bunde_inbox_init] inner_queue_type bfifo");
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  q = fifo_create_dflt(sch, &bfifo_qdisc_ops, qopt->limit);
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
   q = fifo_create_dflt(sch, &bfifo_qdisc_ops, qopt->limit, extack);
+ #endif
 #elif QTYPE == FQ_CODEL
   pr_info("[bunde_inbox_init] inner_queue_type fq_codel");
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  q = qdisc_create_dflt(sch->dev_queue,
+      &fq_codel_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_codel_qdisc_ops,
       TC_H_MAKE(sch->handle, 1),
       extack);
+ #endif
   //codel_q->cparams.target = (FQ_CODEL_TARGET * NSEC_PER_USEC) >> CODEL_SHIFT;
   //codel_q->cparams.ce_threshold = (FQ_CODEL_CETHRESH * NSEC_PER_USEC) >> CODEL_SHIFT;
 #elif QTYPE == FQ
   pr_info("[bunde_inbox_init] inner_queue_type fq");
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  q = qdisc_create_dflt(sch->dev_queue,
+      &fq_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
   q = qdisc_create_dflt(sch->dev_queue,
       &fq_qdisc_ops,
       TC_H_MAKE(sch->handle, 1),
       extack);
+ #endif
 #elif QTYPE == SFQ
   pr_info("[bunde_inbox_init] inner_queue_type sfq");
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  q = qdisc_create_dflt(sch->dev_queue,
+      &sfq_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
   q = qdisc_create_dflt(sch->dev_queue,
       &sfq_qdisc_ops,
       TC_H_MAKE(sch->handle, 1),
       extack);
+ #endif
 #elif QTYPE == PRIO
   pr_info("[bunde_inbox_init] inner_queue_type prio");
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  q = qdisc_create_dflt(sch->dev_queue,
+      &prio_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1));
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
   q = qdisc_create_dflt(sch->dev_queue,
       &prio_qdisc_ops,
       TC_H_MAKE(sch->handle, 1),
       extack);
+ #endif
 #endif
 
   return q ? : ERR_PTR(err);
@@ -514,8 +549,12 @@ int update_inner_qdisc_limit(struct Qdisc *q, unsigned int limit) {
   return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
 static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
               struct netlink_ext_ack *extack)
+#endif
 {
   int err;
   struct tbf_sched_data *q = qdisc_priv(sch);
@@ -538,14 +577,23 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
 
   qopt = nla_data(tb[TCA_TBF_PARMS]);
   if (qopt->rate.linklayer == TC_LINKLAYER_UNAWARE)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+    qdisc_put_rtab(qdisc_get_rtab(&qopt->rate, tb[TCA_TBF_RTAB]));
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
     qdisc_put_rtab(qdisc_get_rtab(&qopt->rate,
                 tb[TCA_TBF_RTAB],
                 NULL));
+#endif
 
-  if (qopt->peakrate.linklayer == TC_LINKLAYER_UNAWARE)
+  if (qopt->peakrate.linklayer == TC_LINKLAYER_UNAWARE) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+      qdisc_put_rtab(qdisc_get_rtab(&qopt->peakrate, tb[TCA_TBF_PTAB]));
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
       qdisc_put_rtab(qdisc_get_rtab(&qopt->peakrate,
                   tb[TCA_TBF_PTAB],
                   NULL));
+#endif
+  }
 
   buffer = min_t(u64, PSCHED_TICKS2NS(qopt->buffer), ~0U);
   mtu = min_t(u64, PSCHED_TICKS2NS(qopt->mtu), ~0U);
@@ -598,7 +646,11 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
     if (err)
       goto done;
   } else if (qopt->limit > 0) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+    child = create_inner_qdisc(sch, qopt);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
     child = create_inner_qdisc(sch, qopt, extack);
+#endif
     if (IS_ERR(child)) {
       err = PTR_ERR(child);
       goto done;
@@ -660,8 +712,12 @@ void tbf_nl_recv_msg(struct sk_buff *skb) {
     return;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+static int tbf_init(struct Qdisc *sch, struct nlattr *opt)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
 static int tbf_init(struct Qdisc *sch, struct nlattr *opt,
             struct netlink_ext_ack *extack)
+#endif
 {
   struct tbf_sched_data *q = qdisc_priv(sch);
 	struct netlink_kernel_cfg cfg = {
@@ -688,7 +744,11 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	printk(KERN_INFO "bundle_inbox_init: created netlink socket\n");
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  return tbf_change(sch, opt);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
   return tbf_change(sch, opt, extack);
+#endif
 }
 
 static void tbf_destroy(struct Qdisc *sch)
@@ -753,8 +813,14 @@ static int tbf_dump_class(struct Qdisc *sch, unsigned long cl,
   return 0;
 }
 
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+static int tbf_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
+         struct Qdisc **old)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
 static int tbf_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
          struct Qdisc **old, struct netlink_ext_ack *extack)
+#endif
 {
   struct tbf_sched_data *q = qdisc_priv(sch);
 
