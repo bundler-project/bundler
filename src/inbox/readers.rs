@@ -1,5 +1,5 @@
+use crate::inbox::udp;
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
-use crate::udp;
 use minion::Cancellable;
 use portus::ipc;
 use portus::ipc::netlink;

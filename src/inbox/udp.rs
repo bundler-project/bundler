@@ -3,7 +3,7 @@ use portus::Error;
 use std::net::UdpSocket;
 use std::sync::mpsc;
 
-use super::Result;
+use portus::Result;
 
 pub struct Socket {
     sk: UdpSocket,

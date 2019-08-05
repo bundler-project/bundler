@@ -1,10 +1,4 @@
 //! A Bundler CCP datapath.
-//!
-//!
-//! This is the sender side. Its responsibilities are to:
-//! 1. communicate with the pacing qdisc
-//! 2. communicate out-of-band with the receiver side of the virutal congestion tunnel
-//! 3. enforce measurements and issue calls to libccp
 
 extern crate bytes;
 extern crate crossbeam;
@@ -14,18 +8,10 @@ extern crate minion;
 extern crate portus;
 extern crate slog;
 
-use portus::Result;
-
-mod flow_state;
 pub mod hash;
 pub mod inbox;
-mod marks;
-mod nl;
 pub mod outbox;
-pub mod qdisc;
-mod readers;
 pub mod serialize;
-pub mod udp;
 
 // Header lengths
 pub const MAC_HEADER_LENGTH: usize = 14;
@@ -41,5 +27,18 @@ fn round_down_power_of_2(x: u32) -> u32 {
         0
     } else {
         1 << (32 - y - 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_round() {
+        let x: f64 = 2.0 * 270.0;
+        assert_eq!(crate::round_down_power_of_2(x as u32), 512);
+        assert_eq!(crate::round_down_power_of_2(538), 512);
+        assert_eq!(crate::round_down_power_of_2(16), 16);
+        assert_eq!(crate::round_down_power_of_2(1), 1);
+        assert_eq!(crate::round_down_power_of_2(0), 0);
     }
 }

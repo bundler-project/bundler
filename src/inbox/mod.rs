@@ -1,11 +1,23 @@
-use crate::flow_state::BundleFlowState;
-use crate::qdisc::*;
-use crate::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
+//! This is the sender side. Its responsibilities are to:
+//! 1. communicate with the pacing qdisc
+//! 2. communicate out-of-band with the receiver side of the virutal congestion tunnel
+//! 3. enforce measurements and issue calls to libccp
+
+use self::datapath::qdisc::*;
+use self::datapath::Datapath;
+use self::flow_state::BundleFlowState;
+use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 use crossbeam::select;
 use minion::Cancellable;
 use slog::{debug, info};
 use std::os::unix::net::UnixDatagram;
+
+pub mod datapath;
+mod flow_state;
+mod nl;
+mod readers;
+pub mod udp;
 
 pub struct DatapathImpl {
     sk: UnixDatagram,
@@ -39,11 +51,11 @@ impl libccp::DatapathOps for DatapathImpl {
     }
 }
 
-pub struct ConnectionImpl {
-    qdisc: Rc<RefCell<Qdisc>>, // qdisc handle
+pub struct ConnectionImpl<Q: Datapath> {
+    qdisc: Rc<RefCell<Q>>, // qdisc handle
 }
 
-impl libccp::CongestionOps for ConnectionImpl {
+impl<Q: Datapath> libccp::CongestionOps for ConnectionImpl<Q> {
     fn set_cwnd(&mut self, cwnd: u32) {
         let set = if cwnd == 0 { 15_000 } else { cwnd };
 
@@ -67,7 +79,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub struct Runtime {
+pub struct Runtime<Q>
+where
+    Q: Datapath + 'static,
+{
     log: slog::Logger,
     qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
@@ -75,8 +90,8 @@ pub struct Runtime {
     // Doing so would be unsafe, because the lifetime is
     // declared as 'static when it is actually the same
     // as the lifetime of Arc<libccp::Datapath>.
-    flow_state: BundleFlowState<'static>,
-    qdisc: Rc<RefCell<Qdisc>>,
+    flow_state: BundleFlowState<'static, Q>,
+    qdisc: Rc<RefCell<Q>>,
     invoke_ticker: crossbeam::Receiver<Instant>,
     ready_to_invoke: bool,
     // Must come last. Since Drop on libccp::Datapath frees
@@ -88,11 +103,11 @@ pub struct Runtime {
 }
 
 // This prevents `Runtime` from being destructured, which could cause `flow_state` to escape.
-impl Drop for Runtime {
+impl<Q: Datapath> Drop for Runtime<Q> {
     fn drop(&mut self) {}
 }
 
-impl Runtime {
+impl Runtime<Qdisc> {
     pub fn new(
         log: slog::Logger,
         listen_port: u16,
@@ -117,15 +132,12 @@ impl Runtime {
                 .unwrap_or_else(|_| ());
         }
 
-        let udpsk = crate::udp::Socket::new(listen_port, outbox_found_tx).unwrap();
+        let udpsk = udp::Socket::new(listen_port, outbox_found_tx).unwrap();
         // udp socket for sending *to* outbox
         let outbox_report = udpsk.try_clone();
 
         let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
         let _outbox_recv_handle = outbox_reader.spawn();
-
-        // unix socket for sending *to* portus
-        let portus_sk = UnixDatagram::unbound().unwrap();
 
         let mut qdisc = Qdisc::bind(
             log.clone(),
@@ -134,11 +146,25 @@ impl Runtime {
             use_dynamic_epoch,
             outbox_found_rx,
             outbox_report,
-        );
+        )
+        .ok()?;
 
         qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
 
         let qdisc = Rc::new(RefCell::new(qdisc));
+        Runtime::with_qdisc(qdisc, qdisc_recv, outbox_recv, log)
+    }
+}
+
+impl<Q: Datapath> Runtime<Q> {
+    pub fn with_qdisc(
+        qdisc: Rc<RefCell<Q>>,
+        qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
+        outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
+        log: slog::Logger,
+    ) -> Option<Self> {
+        // unix socket for sending *to* portus
+        let portus_sk = UnixDatagram::unbound().unwrap();
 
         let dpi = DatapathImpl {
             sk: portus_sk,
@@ -178,7 +204,7 @@ impl Runtime {
         )
         .unwrap();
 
-        let mut fs: BundleFlowState = Default::default();
+        let mut fs: BundleFlowState<Q> = Default::default();
         fs.conn = Some(conn);
         fs.epoch_history.window = 1;
 
@@ -198,7 +224,7 @@ impl Runtime {
     }
 }
 
-impl minion::Cancellable for Runtime {
+impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {

@@ -1,12 +1,13 @@
 use crate::inbox::ConnectionImpl;
-use crate::marks::{Epoch, EpochHistory, MarkHistory, MarkedInstant};
 use crate::serialize::OutBoxFeedbackMsg;
 use slog::info;
 
+mod marks;
+use self::marks::{Epoch, EpochHistory, MarkHistory, MarkedInstant};
+
 /// Calculate and maintain flow measurements.
-#[derive(Default)]
-pub struct BundleFlowState<'dp> {
-    pub conn: Option<libccp::Connection<'dp, ConnectionImpl>>,
+pub struct BundleFlowState<'dp, Q: crate::inbox::datapath::Datapath + 'static> {
+    pub conn: Option<libccp::Connection<'dp, ConnectionImpl<Q>>>,
     pub marked_packets: MarkHistory,
     pub epoch_history: EpochHistory,
 
@@ -26,7 +27,28 @@ pub struct BundleFlowState<'dp> {
     pub curr_qlen: u32,
 }
 
-impl<'dp> BundleFlowState<'dp> {
+impl<'dp, Q: crate::inbox::datapath::Datapath> Default for BundleFlowState<'dp, Q> {
+    fn default() -> Self {
+        BundleFlowState {
+            conn: None,
+            marked_packets: Default::default(),
+            epoch_history: Default::default(),
+            prev_send_time: Default::default(),
+            prev_send_byte_clock: Default::default(),
+            prev_recv_time: Default::default(),
+            prev_recv_byte_clock: Default::default(),
+            send_rate: Default::default(),
+            recv_rate: Default::default(),
+            rtt_estimate: Default::default(),
+            bdp_estimate_packets: Default::default(),
+            acked_bytes: Default::default(),
+            lost_bytes: Default::default(),
+            curr_qlen: Default::default(),
+        }
+    }
+}
+
+impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
     ///
     /// s1  |\   A       |
     ///     | -------    |
