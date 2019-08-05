@@ -5,6 +5,7 @@ authors = ["Akshay Narayan <akshayn@mit.edu>"]
 edition = "2018"
 
 [dependencies]
+arrayref = "0.3"
 bytes = "0.4.5"
 clap = "2.32"
 crossbeam = "0.5"
@@ -16,6 +17,7 @@ libccp = "0.0.10"
 #portus = "^0.4"
 portus = { git = "https://github.com/ccp-project/portus", branch = "bundler" }
 slog = "2"
+structopt = "0.2"
 time = "0.1"
 regex = "1.1.0"
 
