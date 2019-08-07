@@ -2,15 +2,16 @@ extern crate bundler;
 extern crate clap;
 extern crate minion;
 
-use bundler::inbox::Runtime;
-use clap::{value_t, App, Arg};
-use minion::Cancellable;
-use slog::{error, info, warn};
-use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
+#[cfg(target_os = "linux")]
+use slog::{error, info, warn};
+
+#[cfg(target_os = "linux")]
 use regex::Regex;
 
+#[cfg(target_os = "linux")]
 fn lookup_qdisc(logger: &slog::Logger, iface: &str) -> Option<u32> {
     let qdisc_show = Command::new("sudo")
         .args(&["tc", "qdisc", "show", "dev", iface])
@@ -39,6 +40,7 @@ fn lookup_qdisc(logger: &slog::Logger, iface: &str) -> Option<u32> {
     return None;
 }
 
+#[cfg(target_os = "linux")]
 fn get_iface_ip(logger: &slog::Logger, iface: &str) -> Option<String> {
     let ip_addr = Command::new("ip")
         .arg("addr")
@@ -77,6 +79,7 @@ fn get_iface_ip(logger: &slog::Logger, iface: &str) -> Option<String> {
     return None;
 }
 
+#[cfg(target_os = "linux")]
 fn setup_qdisc(
     logger: &slog::Logger,
     iface: &str,
@@ -84,6 +87,7 @@ fn setup_qdisc(
     verbose: bool,
     matches: clap::ArgMatches,
 ) -> (u32, u32) {
+    use std::path::PathBuf;
     info!(logger, "Installing bundler qdisc"; "interface" => iface);
     if matches.is_present("keep_qdisc") {
         let major_handle = lookup_qdisc(logger, iface);
@@ -265,7 +269,9 @@ fn setup_qdisc(
     }
 }
 
+#[cfg(target_os = "linux")]
 fn main() {
+    use clap::{value_t, App, Arg};
     let matches = App::new("inbox")
         .version("0.1")
         .arg(
@@ -362,6 +368,8 @@ fn main() {
 
     let (handle_major, handle_minor) = setup_qdisc(&log, &iface, listen_port, verbose, matches);
 
+    use bundler::inbox::Runtime;
+    use minion::Cancellable;
     let mut r = Runtime::new(
         log,
         listen_port,
@@ -373,4 +381,9 @@ fn main() {
     )
     .unwrap();
     r.run().unwrap()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    println!("Runs on Linux only")
 }

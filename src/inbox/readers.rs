@@ -1,34 +1,42 @@
 use crate::inbox::udp;
-use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
+use crate::serialize::OutBoxFeedbackMsg;
 use minion::Cancellable;
 use portus::ipc;
-use portus::ipc::netlink;
-use portus::ipc::Ipc;
 use slog::warn;
 use std::os::unix::net::UnixDatagram;
 
+use ipc::Ipc;
+
+#[cfg(target_os = "linux")]
+use portus::ipc::netlink;
+#[cfg(target_os = "linux")]
 pub struct NlMsgReader(
     netlink::Socket<ipc::Blocking>,
     Vec<u8>,
     crossbeam::Sender<crate::serialize::QDiscFeedbackMsg>,
 );
 
+#[cfg(target_os = "linux")]
 impl NlMsgReader {
     pub fn make(
         nl: netlink::Socket<ipc::Blocking>,
-    ) -> (Self, crossbeam::Receiver<QDiscFeedbackMsg>) {
+    ) -> (
+        Self,
+        crossbeam::Receiver<crate::serialize::QDiscFeedbackMsg>,
+    ) {
         let (send, recv) = crossbeam::unbounded();
         let s = NlMsgReader(nl, vec![0u8; 100], send);
         (s, recv)
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Cancellable for NlMsgReader {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
         self.0.recv(&mut self.1[0..100])?;
-        let m = QDiscFeedbackMsg::from_slice(&self.1[0..32]);
+        let m = crate::serialize::QDiscFeedbackMsg::from_slice(&self.1[0..32]);
         self.2.send(m)?;
         Ok(minion::LoopState::Continue)
     }

@@ -15,4 +15,5 @@ pub trait Datapath {
     fn get_curr_epoch_length(&self) -> u32;
 }
 
+#[cfg(target_os = "linux")]
 pub mod qdisc;

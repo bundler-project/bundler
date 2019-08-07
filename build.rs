@@ -1,10 +1,10 @@
 extern crate bindgen;
 
-use std::env;
-use std::path::Path;
-use std::path::PathBuf;
-
+#[cfg(target_os = "linux")]
 fn main() {
+    use std::env;
+    use std::path::Path;
+    use std::path::PathBuf;
     std::process::Command::new("./build_tc.sh")
         .current_dir("./qdisc")
         .spawn()
@@ -26,12 +26,6 @@ fn main() {
     println!("cargo:rustc-link-lib=static=nl-genl-3");
     println!("cargo:rustc-link-lib=static=nl-route-3");
     println!("cargo:rustc-link-lib=static=nl-3");
-    /*
-    println!("cargo:rustc-link-lib=nl-genl-3");
-    println!("cargo:rustc-link-lib=nfnetlink");
-    println!("cargo:rustc-link-lib=nl-route-3");
-    println!("cargo:rustc-link-lib=nl-3")
-    */
 
     let nl_bindings = bindgen::Builder::default()
         .header("nl-route.h")
@@ -63,3 +57,6 @@ fn main() {
         .write_to_file(nl_out_path.join("libnl.rs"))
         .expect("Unable to write libnl bindings");
 }
+
+#[cfg(not(target_os = "linux"))]
+fn main() {}

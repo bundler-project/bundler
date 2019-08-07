@@ -3,18 +3,18 @@ extern crate bytes;
 extern crate clap;
 extern crate time;
 
-use clap::{value_t, App, Arg};
-use pcap::{Capture, Device};
-
-use bundler::serialize;
-use bundler::serialize::OutBoxFeedbackMsg;
-
-use std::net::UdpSocket;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread;
-
+#[cfg(target_os = "linux")]
 fn main() {
+    use clap::{value_t, App, Arg};
+    use pcap::{Capture, Device};
+
+    use bundler::serialize;
+    use bundler::serialize::OutBoxFeedbackMsg;
+
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
+    use std::sync::mpsc::{Receiver, Sender};
+    use std::thread;
     let matches = App::new("outbox")
         .version("0.1")
         .arg(
@@ -132,4 +132,9 @@ fn main() {
         no_ethernet,
         portus::algs::make_logger(),
     )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    println!("Runs on Linux only")
 }

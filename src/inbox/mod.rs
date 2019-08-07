@@ -3,20 +3,26 @@
 //! 2. communicate out-of-band with the receiver side of the virutal congestion tunnel
 //! 3. enforce measurements and issue calls to libccp
 
+#[cfg(target_os = "linux")]
 use self::datapath::qdisc::*;
+
 use self::datapath::Datapath;
 use self::flow_state::BundleFlowState;
-use self::readers::{NlMsgReader, UdpMsgReader, UnixMsgReader};
+use self::readers::UnixMsgReader;
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 use crossbeam::select;
 use minion::Cancellable;
 use slog::{debug, info};
 use std::os::unix::net::UnixDatagram;
 
+#[cfg(target_os = "linux")]
+use self::readers::NlMsgReader;
+
 pub mod datapath;
 mod flow_state;
+#[cfg(target_os = "linux")]
 mod nl;
-mod readers;
+pub mod readers;
 pub mod udp;
 
 pub struct DatapathImpl {
@@ -107,6 +113,7 @@ impl<Q: Datapath> Drop for Runtime<Q> {
     fn drop(&mut self) {}
 }
 
+#[cfg(target_os = "linux")]
 impl Runtime<Qdisc> {
     pub fn new(
         log: slog::Logger,
@@ -136,7 +143,7 @@ impl Runtime<Qdisc> {
         // udp socket for sending *to* outbox
         let outbox_report = udpsk.try_clone();
 
-        let (outbox_reader, outbox_recv) = UdpMsgReader::make(udpsk);
+        let (outbox_reader, outbox_recv) = self::readers::UdpMsgReader::make(udpsk);
         let _outbox_recv_handle = outbox_reader.spawn();
 
         let mut qdisc = Qdisc::bind(
