@@ -1,6 +1,6 @@
 use bundler::{IP_HEADER_LENGTH, IP_PROTO_TCP, MAC_HEADER_LENGTH, PROTO_IN_IP_HEADER};
 use minion::Cancellable;
-use slog::{info, o};
+use slog::{info, o, Drain};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -17,9 +17,19 @@ struct Opt {
     with_ethernet: bool,
 }
 
+fn make_logger() -> slog::Logger {
+    let decorator = slog_term::TermDecorator::new().build();
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .overflow_strategy(slog_async::OverflowStrategy::Block)
+        .build()
+        .fuse();
+    slog::Logger::root(drain, o!())
+}
+
 fn main() {
     let opt = Opt::from_args();
-    let log = portus::algs::make_logger();
+    let log = make_logger();
     let root_log = log.new(o!("node" => "script"));
 
     let inbox_capture = pcap::Capture::from_file(opt.inbox_dump_file.clone()).unwrap();
