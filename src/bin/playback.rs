@@ -202,15 +202,15 @@ fn start_outbox<T: pcap::Activated + Send + 'static>(
     epoch_length_adjust_rx: mpsc::Receiver<u32>,
 ) -> crossbeam::Receiver<bundler::serialize::OutBoxFeedbackMsg> {
     // outbox sends on tx when it sees an epoch boundary packet
-    let (epoch_boundary_tx, epoch_boundary_rx): (
-        mpsc::Sender<(u64, u32, u64)>,
-        mpsc::Receiver<(u64, u32, u64)>,
-    ) = mpsc::channel();
-
+    let (epoch_boundary_tx, epoch_boundary_rx) = crossbeam::bounded::<(u64, u32, u64)>(0);
     let (outbox_feedback_tx, outbox_feedback_rx) = crossbeam::bounded(0);
 
     std::thread::spawn(move || loop {
-        let (ts, hash, recvd) = epoch_boundary_rx.recv().unwrap();
+        let (ts, hash, recvd) = match epoch_boundary_rx.recv() {
+            Ok((ts, hash, recvd)) => (ts, hash, recvd),
+            Err(_) => break,
+        };
+
         let msg = bundler::serialize::OutBoxFeedbackMsg {
             bundle_id: 42,
             marked_packet_hash: hash,
@@ -231,6 +231,8 @@ fn start_outbox<T: pcap::Activated + Send + 'static>(
             !outbox_opt.with_ethernet,
             log.clone(),
         )
+        .unwrap_err();
+        info!(log.clone(), "outbox done");
     });
 
     outbox_feedback_rx

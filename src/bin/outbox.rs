@@ -13,7 +13,6 @@ fn main() {
 
     use std::net::UdpSocket;
     use std::sync::mpsc;
-    use std::sync::mpsc::{Receiver, Sender};
     use std::thread;
     let matches = App::new("outbox")
         .version("0.1")
@@ -93,7 +92,7 @@ fn main() {
         }
     }
 
-    let (tx, rx): (Sender<(u64, u32, u64)>, Receiver<(u64, u32, u64)>) = mpsc::channel();
+    let (tx, rx) = crossbeam::unbounded::<(u64, u32, u64)>();
 
     thread::spawn(move || loop {
         let (ts, hash, recvd) = rx.recv().unwrap();
@@ -132,6 +131,7 @@ fn main() {
         no_ethernet,
         portus::algs::make_logger(),
     )
+    .unwrap();
 }
 
 #[cfg(not(target_os = "linux"))]

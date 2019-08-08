@@ -6,12 +6,12 @@ use crate::{IP_HEADER_LENGTH, IP_PROTO_TCP, MAC_HEADER_LENGTH, PROTO_IN_IP_HEADE
 
 pub fn start_outbox<T: pcap::Activated + ?Sized>(
     mut cap: pcap::Capture<T>,
-    tx: mpsc::Sender<(u64, u32, u64)>,
+    tx: crossbeam::Sender<(u64, u32, u64)>,
     r: mpsc::Receiver<u32>,
     mut sample_rate: u32,
     no_ethernet: bool,
     log: slog::Logger,
-) -> ! {
+) -> Result<(), ()> {
     let ip_header_start = if no_ethernet { 0 } else { MAC_HEADER_LENGTH };
     let tcp_header_start = ip_header_start + IP_HEADER_LENGTH;
     let mut bytes_recvd: u64 = 0;
@@ -81,7 +81,9 @@ pub fn start_outbox<T: pcap::Activated + ?Sized>(
                     pkts = 0;
                 }
             }
-            _ => {}
+            _ => {
+                return Err(());
+            }
         }
     }
 }
