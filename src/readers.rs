@@ -10,7 +10,7 @@ use std::os::unix::net::UnixDatagram;
 pub struct NlMsgReader(
     netlink::Socket<ipc::Blocking>,
     Vec<u8>,
-    crossbeam::Sender<QDiscFeedbackMsg>,
+    crossbeam::Sender<crate::serialize::QDiscFeedbackMsg>,
 );
 
 impl NlMsgReader {

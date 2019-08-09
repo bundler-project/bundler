@@ -9,81 +9,10 @@ use pcap::{Capture, Device};
 use bundler::serialize;
 use bundler::serialize::OutBoxFeedbackMsg;
 
-use slog::{debug, info};
 use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
-
-// Header lengths
-const MAC_HEADER_LENGTH: usize = 14;
-const IP_HEADER_LENGTH: usize = 20;
-// Locations in headers
-const PROTO_IN_IP_HEADER: usize = 9;
-// Values
-const IP_PROTO_TCP: u8 = 6;
-
-/// TCP Header
-///    0                   1                   2                   3
-///    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |          Source Port          |       Destination Port        |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                        Sequence Number                        |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                    Acknowledgment Number                      |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |  Data |           |U|A|P|R|S|F|                               |
-///   | Offset| Reserved  |R|C|S|S|Y|I|            Window             |
-///   |       |           |G|K|H|T|N|N|                               |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |           Checksum            |         Urgent Pointer        |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                    Options                    |    Padding    |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                             data                              |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///
-/// IP Header
-///
-///    0                   1                   2                   3
-///    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |Version|  IHL  |Type of Service|          Total Length         |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |         Identification        |Flags|      Fragment Offset    |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |  Time to Live |    Protocol   |         Header Checksum       |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                       Source Address                          |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                    Destination Address                        |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                    Options                    |    Padding    |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///
-/// Pseudo-header for packet hashing:
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                       Source Address (ipv4 header)            |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                    Destination Address (ipv4 header)          |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |       Source Port (tcp hdr)   | Destination Port (tcp hdr)    |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |      Identification (ipv4 hdr)|
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-fn hash_packet(ip_header_start: usize, tcp_header_start: usize, pkt: &[u8]) -> u32 {
-    use fnv;
-    use std::hash::Hasher;
-    let mut h = fnv::FnvHasher::default();
-    //let src_dst_ip = &pkt[ip_header_start + 12..ip_header_start + 20];
-    let src_dst_port = &pkt[tcp_header_start..tcp_header_start + 2];
-    let ipid = &pkt[ip_header_start + 4..ip_header_start + 6];
-    //h.write(src_dst_ip);
-    h.write(src_dst_port);
-    h.write(ipid);
-    h.finish() as u32
-}
 
 fn main() {
     let matches = App::new("outbox")
@@ -127,15 +56,10 @@ fn main() {
         )
         .get_matches();
 
-    let log = portus::algs::make_logger();
-
     let iface = matches.value_of("iface").unwrap();
     let filter = matches.value_of("filter").unwrap();
     let mut sample_rate = value_t!(matches.value_of("sample_rate"), u32).unwrap();
     let no_ethernet = matches.is_present("no_ethernet");
-
-    let ip_header_start = if no_ethernet { 0 } else { MAC_HEADER_LENGTH };
-    let tcp_header_start = ip_header_start + IP_HEADER_LENGTH;
 
     let devs = Device::list().unwrap();
     let dev = devs.into_iter().find(|dev| dev.name == iface);
@@ -184,11 +108,6 @@ fn main() {
             .expect("failed to send on UDP socket");
     });
 
-    let mut bytes_recvd: u64 = 0;
-    let mut last_bytes_recvd: u64 = 0;
-    let mut r1: u64 = 0;
-    let mut pkts: u64 = 0;
-
     let (s, r) = mpsc::channel();
     thread::spawn(move || {
         let mut recv_buf = [0u8; 64];
@@ -205,69 +124,12 @@ fn main() {
         }
     });
 
-    loop {
-        match r.try_recv() {
-            Ok(epoch_length_packets) => {
-                if epoch_length_packets > 0 {
-                    info!(log, "adjust_epoch";
-                        "curr" => sample_rate,
-                        "new" => epoch_length_packets,
-                    );
-
-                    sample_rate = epoch_length_packets;
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => (),
-            Err(mpsc::TryRecvError::Disconnected) => break,
-        }
-
-        match cap.next() {
-            Ok(pkt) => {
-                let now = time::precise_time_ns();
-                let data = pkt.data;
-
-                // Is this a TCP packet?
-                if data[ip_header_start + PROTO_IN_IP_HEADER] != IP_PROTO_TCP {
-                    continue;
-                }
-
-                bytes_recvd += pkt.header.len as u64;
-                if no_ethernet {
-                    bytes_recvd += MAC_HEADER_LENGTH as u64;
-                }
-
-                let hash = hash_packet(ip_header_start, tcp_header_start, data);
-
-                pkts += 1;
-
-                // If hash ends in X zeros, "mark" it
-                if hash % sample_rate == 0 {
-                    let r2 = now;
-                    tx.send((r2, hash, bytes_recvd)).unwrap();
-                    debug!(log, "outbox hash";
-                        "ip" => ?&data[ip_header_start + 12..ip_header_start+20],
-                        "ports" => ?&data[tcp_header_start..tcp_header_start+4],
-                        "ipid" => ?&data[ip_header_start+4..ip_header_start+6],
-                        "hash" => hash,
-                    );
-
-                    if r1 != 0 {
-                        let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
-                        let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
-                        info!(log, "outbox epoch";
-                            "recv_rate" => recv_epoch_bytes / recv_epoch_seconds,
-                            "recv_epoch_bytes" => recv_epoch_bytes,
-                            "recv_epoch_ns" => (r2 - r1),
-                            "recv_epoch_packet_count" => pkts,
-                        );
-                    }
-
-                    r1 = r2;
-                    last_bytes_recvd = bytes_recvd;
-                    pkts = 0;
-                }
-            }
-            _ => {}
-        }
-    }
+    bundler::outbox::start_outbox(
+        cap,
+        tx,
+        r,
+        sample_rate,
+        no_ethernet,
+        portus::algs::make_logger(),
+    )
 }

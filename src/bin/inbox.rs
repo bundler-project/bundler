@@ -2,7 +2,7 @@ extern crate bundler;
 extern crate clap;
 extern crate minion;
 
-use bundler::Runtime;
+use bundler::inbox::Runtime;
 use clap::{value_t, App, Arg};
 use minion::Cancellable;
 use slog::{error, info, warn};
