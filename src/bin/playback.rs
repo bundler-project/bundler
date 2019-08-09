@@ -36,6 +36,7 @@ fn main() {
     let outbox_capture = pcap::Capture::from_file(opt.outbox_dump_file.clone()).unwrap();
 
     let (outbox_report_tx, epoch_length_adjust_rx) = glue();
+    let (outbox_feedback_tx, outbox_feedback_rx) = crossbeam::bounded(0);
     let (qdisc_ctl_tx, qdisc_ctl_rx) = mpsc::channel();
 
     let (inbox_player, qdisc_match_rx) = InboxCapturePlayer::new(
@@ -47,14 +48,6 @@ fn main() {
 
     info!(root_log, "starting inbox playback");
     let inbox_player_runner = inbox_player.spawn();
-
-    info!(root_log, "starting outbox");
-    let outbox_feedback_rx = start_outbox(
-        log.new(o!("node" => "outbox")),
-        opt.clone(),
-        outbox_capture,
-        epoch_length_adjust_rx,
-    );
 
     info!(root_log, "starting inbox runtime");
 
@@ -76,6 +69,16 @@ fn main() {
     });
 
     r.recv().unwrap();
+
+    info!(root_log, "starting outbox");
+    start_outbox(
+        log.new(o!("node" => "outbox")),
+        opt.clone(),
+        outbox_capture,
+        epoch_length_adjust_rx,
+        outbox_feedback_tx,
+    );
+
     inbox_player_runner.wait().unwrap();
     info!(root_log, "done");
 
@@ -210,10 +213,10 @@ fn start_outbox<T: pcap::Activated + Send + 'static>(
     outbox_opt: Opt,
     outbox_capture: pcap::Capture<T>,
     epoch_length_adjust_rx: mpsc::Receiver<u32>,
-) -> crossbeam::Receiver<bundler::serialize::OutBoxFeedbackMsg> {
+    outbox_feedback_tx: crossbeam::Sender<bundler::serialize::OutBoxFeedbackMsg>,
+) {
     // outbox sends on tx when it sees an epoch boundary packet
     let (epoch_boundary_tx, epoch_boundary_rx) = crossbeam::bounded::<(u64, u32, u64)>(0);
-    let (outbox_feedback_tx, outbox_feedback_rx) = crossbeam::bounded(0);
 
     std::thread::spawn(move || loop {
         let (ts, hash, recvd) = match epoch_boundary_rx.recv() {
@@ -244,8 +247,6 @@ fn start_outbox<T: pcap::Activated + Send + 'static>(
         .unwrap_err();
         info!(log.clone(), "outbox done");
     });
-
-    outbox_feedback_rx
 }
 
 fn new_inbox_runtime(
