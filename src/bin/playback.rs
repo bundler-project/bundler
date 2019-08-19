@@ -1,4 +1,4 @@
-use bundler::{IP_HEADER_LENGTH, IP_PROTO_TCP, MAC_HEADER_LENGTH, PROTO_IN_IP_HEADER};
+use bundler::{IP_HEADER_LENGTH, MAC_HEADER_LENGTH};
 use minion::Cancellable;
 use slog::{info, o, Drain};
 use std::cell::RefCell;
@@ -145,11 +145,6 @@ impl minion::Cancellable for InboxCapturePlayer {
                 let now = pkt.header.ts;
                 let now = now.tv_sec as u64 * 1_000_000_000 + now.tv_usec as u64 * 1_000; // ns since epoch
                 let data = pkt.data;
-
-                // Is this a TCP packet?
-                if data[self.ip_header_start + PROTO_IN_IP_HEADER] != IP_PROTO_TCP {
-                    return Ok(minion::LoopState::Continue);
-                }
 
                 self.bytes_recv += pkt.header.len as u64;
                 if !self.with_ethernet {

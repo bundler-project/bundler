@@ -2,7 +2,7 @@ use slog::{debug, info};
 use std::sync::mpsc;
 
 use crate::hash;
-use crate::{IP_HEADER_LENGTH, IP_PROTO_TCP, MAC_HEADER_LENGTH, PROTO_IN_IP_HEADER};
+use crate::{IP_HEADER_LENGTH, MAC_HEADER_LENGTH};
 
 pub fn start_outbox<T: pcap::Activated + ?Sized>(
     mut cap: pcap::Capture<T>,
@@ -40,11 +40,6 @@ pub fn start_outbox<T: pcap::Activated + ?Sized>(
                 let now = pkt.header.ts;
                 let now = now.tv_sec as u64 * 1_000_000_000 + now.tv_usec as u64 * 1_000; // ns since epoch
                 let data = pkt.data;
-
-                // Is this a TCP packet?
-                if data[ip_header_start + PROTO_IN_IP_HEADER] != IP_PROTO_TCP {
-                    continue;
-                }
 
                 bytes_recvd += pkt.header.len as u64;
                 if no_ethernet {
