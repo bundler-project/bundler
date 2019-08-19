@@ -1,6 +1,6 @@
 use bundler::{IP_HEADER_LENGTH, MAC_HEADER_LENGTH};
 use minion::Cancellable;
-use slog::{info, o, Drain};
+use slog::{info, debug, o, Drain};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -154,6 +154,12 @@ impl minion::Cancellable for InboxCapturePlayer {
                 let hash =
                     bundler::hash::hash_packet(self.ip_header_start, self.tcp_header_start, data);
                 if hash % self.epoch_sample_rate == 0 {
+                    debug!(self.log, "inbox qdisc epoch";
+                        "ip" => ?bundler::hash::unpack_ips(data, self.ip_header_start),
+                        "ports" => ?bundler::hash::unpack_ports(data, self.tcp_header_start),
+                        "ipid" => ?&data[self.ip_header_start+4..self.ip_header_start+6],
+                        "hash" => hash,
+                    );
                     let msg = bundler::serialize::QDiscFeedbackMsg {
                         bundle_id: 42,
                         marked_packet_hash: hash,
