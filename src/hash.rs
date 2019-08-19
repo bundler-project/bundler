@@ -61,7 +61,6 @@
 ///   | Destination Port (tcp[2:4])   |  Identification (ipv4[4:6])   |
 ///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 pub fn hash_packet(ip_header_start: usize, tcp_header_start: usize, pkt: &[u8]) -> u32 {
-    use fnv;
     use std::hash::Hasher;
     let mut h = fnv::FnvHasher::default();
     let dst_ip = &pkt[ip_header_start + 16..ip_header_start + 20];
