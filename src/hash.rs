@@ -1,5 +1,17 @@
 /// Take the FNV hash of the packet for epoch boundary identification.
-/// Use (src ip, dst ip, src port, dst port, IP ID) to identify packets.
+/// Use (dst ip, dst port, IP ID) to identify packets.
+///
+/// UDP Header
+///
+///    0                   1                   2                   3
+///    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |          Source Port          |       Destination Port        |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |          Length               |       Checksum                |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+///   |                             data                              |
+///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ///
 /// TCP Header
 ///    0                   1                   2                   3
@@ -41,24 +53,22 @@
 ///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ///
 /// Pseudo-header for packet hashing:
+///    0                   1                   2                   3
+///    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 ///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                       Source Address (ipv4 header)            |
+///   |           Destination Address (ipv4[16:20])                   |
 ///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |                    Destination Address (ipv4 header)          |
+///   | Destination Port (tcp[2:4])   |  Identification (ipv4[4:6])   |
 ///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |       Source Port (tcp hdr)   | Destination Port (tcp hdr)    |
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-///   |      Identification (ipv4 hdr)|
-///   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 pub fn hash_packet(ip_header_start: usize, tcp_header_start: usize, pkt: &[u8]) -> u32 {
     use fnv;
     use std::hash::Hasher;
     let mut h = fnv::FnvHasher::default();
-    //let src_dst_ip = &pkt[ip_header_start + 12..ip_header_start + 20];
-    let src_dst_port = &pkt[tcp_header_start..tcp_header_start + 2];
+    let dst_ip = &pkt[ip_header_start + 16..ip_header_start + 20];
+    let dst_port = &pkt[tcp_header_start + 2..tcp_header_start + 4];
     let ipid = &pkt[ip_header_start + 4..ip_header_start + 6];
-    //h.write(src_dst_ip);
-    h.write(src_dst_port);
+    h.write(dst_ip);
+    h.write(dst_port);
     h.write(ipid);
     h.finish() as u32
 }
