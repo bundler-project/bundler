@@ -1,6 +1,6 @@
 [submodule "libnl"]
 	path = libnl
-	url = git@github.com:ccp-project/libnl
+	url = https://github.com/ccp-project/libnl
 [submodule "qdisc/iproute2"]
 	path = qdisc/iproute2
 	url = https://github.com/ccp-project/iproute2.git
