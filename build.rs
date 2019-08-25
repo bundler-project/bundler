@@ -19,7 +19,10 @@ fn main() {
             .current_dir("./libnl")
             .spawn()
             .expect("libnl make failed");
-        libnl_make.wait().expect("libnl make spawned but failed");
+        let exit = libnl_make.wait().expect("libnl make spawned but failed");
+        if !exit.success() {
+            panic!("libnl make failed with code {:?}", exit.code());
+        }
     }
 
     println!("cargo:rustc-link-search=./libnl/lib/.libs/");
