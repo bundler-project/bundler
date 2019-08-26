@@ -1,7 +1,5 @@
 #!/bin/bash
 
-sudo apt-get install libdb-dev
-
 git submodule update --init --recursive
 
 cd iproute2
