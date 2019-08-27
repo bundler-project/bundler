@@ -350,8 +350,8 @@ fnv_64_buf(void *buf, size_t len, Fnv64_t hval)
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 static uint32_t hash_header(unsigned char *dst_ip, unsigned char *ports, unsigned char *ipid) {
   uint32_t hash = 0;
-  hash = fnv_64_buf(dst_ip, 4, FNV1_64_INIT);
-  hash = fnv_64_buf((void*) (ports + 2), 2, hash);
+  //hash = fnv_64_buf(dst_ip, 4, FNV1_64_INIT);
+  hash = fnv_64_buf((void*) (ports + 2), 2, FNV1_64_INIT);
   hash = fnv_64_buf(ipid, 2, hash);
   return hash;
 }

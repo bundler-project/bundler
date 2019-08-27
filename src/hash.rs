@@ -63,10 +63,10 @@
 pub fn hash_packet(ip_header_start: usize, tcp_header_start: usize, pkt: &[u8]) -> u32 {
     use std::hash::Hasher;
     let mut h = fnv::FnvHasher::default();
-    let dst_ip = &pkt[ip_header_start + 16..ip_header_start + 20];
+    //let dst_ip = &pkt[ip_header_start + 16..ip_header_start + 20];
     let dst_port = &pkt[tcp_header_start + 2..tcp_header_start + 4];
     let ipid = &pkt[ip_header_start + 4..ip_header_start + 6];
-    h.write(dst_ip);
+    //h.write(dst_ip);
     h.write(dst_port);
     h.write(ipid);
     h.finish() as u32
