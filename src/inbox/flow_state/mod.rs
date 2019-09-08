@@ -88,6 +88,10 @@ impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
         // rtt is current time - sent mark time
         self.rtt_estimate = now.saturating_sub(s2);
 
+        if r1 > r2 || r1_bytes > r2_bytes || s1 > s2 || s1_bytes > s2_bytes {
+            return;
+        }
+
         let send_epoch_ns = s2 - s1;
         let recv_epoch_ns = r2 - r1;
 
