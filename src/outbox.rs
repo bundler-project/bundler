@@ -60,7 +60,7 @@ pub fn start_outbox<T: pcap::Activated + ?Sized>(
                         "hash" => hash,
                     );
 
-                    if r1 != 0 {
+                    if r1 != 0 && r1 < r2 {
                         let recv_epoch_seconds = (r2 - r1) as f64 / 1e9;
                         let recv_epoch_bytes = (bytes_recvd - last_bytes_recvd) as f64;
                         info!(log, "outbox epoch";
