@@ -266,7 +266,7 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                             q.update_send_rate(self.flow_state.send_rate as u64);
                         }
 
-                        debug!(self.log, "new measurements";
+                        info!(self.log, "new measurements";
                             "now" => now,
                             "hash" => h,
                             "rtt" => self.flow_state.rtt_estimate / 1_000,
