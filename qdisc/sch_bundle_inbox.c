@@ -202,7 +202,7 @@ void send_to_dp(struct tbf_sched_data *q, char *msg, int msg_size) {
 		GFP_NOWAIT
 	);
 	if (res < 0) {
-		printk(KERN_ERR "bundle_inbox_err: failed to send netlink message %d\n", res);
+		//printk(KERN_ERR "bundle_inbox_err: failed to send netlink message %d\n", res);
 	}
 }
 
@@ -681,7 +681,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
   memcpy(&q->rate, &rate, sizeof(struct psched_ratecfg));
   memcpy(&q->peak, &peak, sizeof(struct psched_ratecfg));
 
-  pr_info("[sch_bundle_inbox] rate %llu\n", *((u64*) &rate));
+  //pr_info("[sch_bundle_inbox] rate %llu\n", *((u64*) &rate));
 
   sch_tree_unlock(sch);
   err = 0;
