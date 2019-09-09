@@ -78,7 +78,7 @@ pub fn start_outbox<T: pcap::Activated + ?Sized>(
             }
             e => {
                 error!(log, "pcap error"; "err" => ?e);
-                return Err(());
+                continue;
             }
         }
     }
