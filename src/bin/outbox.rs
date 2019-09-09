@@ -77,7 +77,7 @@ fn main() {
     });
 
     let sock = UdpSocket::bind("0.0.0.0:28317").expect("failed to create UDP socket");
-    let recv_sock = sock.try_clone().unwrap();
+    let recv_sock = sock.try_clone().expect("Clone recv_sock");
     if let None = inbox {
         let mut buf = [0u8; 64];
         match recv_sock.recv_from(&mut buf) {
@@ -137,7 +137,7 @@ fn main() {
         no_ethernet,
         portus::algs::make_logger(),
     )
-    .unwrap();
+    .expect("outbox returned error");
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -1,4 +1,4 @@
-use slog::{debug, info};
+use slog::{debug, info, error};
 use std::sync::mpsc;
 
 use crate::hash;
@@ -52,7 +52,7 @@ pub fn start_outbox<T: pcap::Activated + ?Sized>(
                 // If hash ends in X zeros, "mark" it
                 if hash % sample_rate == 0 {
                     let r2 = now;
-                    tx.send((r2, hash, bytes_recvd)).unwrap();
+                    tx.send((r2, hash, bytes_recvd)).expect("Send epoch boundary packet on channel");
                     debug!(log, "outbox hash";
                         "ip" => ?hash::unpack_ips(data, ip_header_start),
                         "ports" => ?hash::unpack_ports(data, tcp_header_start),
@@ -76,7 +76,8 @@ pub fn start_outbox<T: pcap::Activated + ?Sized>(
                     pkts = 0;
                 }
             }
-            _ => {
+            e => {
+                error!(log, "pcap error"; "err" => ?e);
                 return Err(());
             }
         }
