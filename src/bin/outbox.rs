@@ -95,7 +95,13 @@ fn main() {
     let (tx, rx) = crossbeam::unbounded::<(u64, u32, u64)>();
 
     thread::spawn(move || loop {
-        let (ts, hash, recvd) = rx.recv().unwrap();
+        let (ts, hash, recvd) = match rx.recv() {
+            Ok(x) => x,
+            Err(e) => {
+                println!("Error getting next OutBoxFeedbackMsg to send {:?}", e);
+                break;
+            }
+        };
         let msg = OutBoxFeedbackMsg {
             bundle_id: 42,
             marked_packet_hash: hash,
