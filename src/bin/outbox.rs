@@ -93,12 +93,15 @@ fn main() {
     }
 
     let (tx, rx) = crossbeam::unbounded::<(u64, u32, u64)>();
+    let log = portus::algs::make_logger();
+    let feedback_log = log.clone();
+    let recv_log = log.clone();
 
     thread::spawn(move || loop {
         let (ts, hash, recvd) = match rx.recv() {
             Ok(x) => x,
             Err(e) => {
-                println!("Error getting next OutBoxFeedbackMsg to send {:?}", e);
+                slog::error!(feedback_log, "Error getting next OutBoxFeedbackMsg to send"; "err" => ?e);
                 break;
             }
         };
@@ -124,10 +127,12 @@ fn main() {
                         s.send(msg.epoch_length_packets).unwrap();
                     }
                 }
-                Err(e) => println!("{:?}", e),
+                Err(e) => slog::warn!(recv_log, "Error getting OutBoxReportMsg"; "err" => ?e),
             }
         }
     });
+
+    slog::info!(&log, "starting outbox");
 
     bundler::outbox::start_outbox(
         cap,
@@ -135,7 +140,7 @@ fn main() {
         r,
         sample_rate,
         no_ethernet,
-        portus::algs::make_logger(),
+        log,
     )
     .expect("outbox returned error");
 }
