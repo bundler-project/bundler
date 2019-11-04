@@ -210,18 +210,18 @@ fn setup_qdisc(
             "protocol",
             "ip",
             "prio",
-            "1",
-            "u32", // give priority 1 (highest)
+            "1", // give priority 1 to the filter (highest)
+            "u32", 
             "match",
             "ip",
             "protocol",
-            "17",
-            "0xff", // match UDP
+            "17", // match UDP
+            "0xff", 
             "match",
             "ip",
             "sport",
             &self_port.to_string(),
-            "0xffff", // match inbox feedback source port
+            "0xffff", // match only inbox feedback source port
             "match",
             "ip",
             "src",
@@ -259,6 +259,28 @@ fn setup_qdisc(
         println!("{}", stdout);
         println!("{}", stderr);
         error!(logger, "tc qdisc add child bundler");
+    }
+    
+    let ok = Command::new("sudo")
+        .args(&[
+            "tc",
+            "qdisc",
+            "add",
+            "dev",
+            iface,
+            "parent",
+            "1:3",
+            "pfifo_fast",
+        ])
+        .output()
+        .expect("tc qdisc add child pfifo in priority 3");
+
+    if !ok.status.success() {
+        let stdout = std::str::from_utf8(&ok.stdout).unwrap();
+        let stderr = std::str::from_utf8(&ok.stderr).unwrap();
+        println!("{}", stdout);
+        println!("{}", stderr);
+        error!(logger, "tc qdisc add root prio");
     }
 
     let major_handle = lookup_qdisc(logger, iface);
