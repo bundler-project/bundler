@@ -10,6 +10,9 @@ endif
 ifeq ($(QTYPE), fq_codel)
 	FLAGS = -DQTYPE=2
 endif
+ifeq ($(QTYPE), wfq_codel)
+	FLAGS = -DQTYPE=6
+endif
 ifeq ($(QTYPE), fq)
 	FLAGS = -DQTYPE=3
 endif

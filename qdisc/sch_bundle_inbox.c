@@ -31,6 +31,7 @@
 #define FQ 3
 #define SFQ 4
 #define PRIO 5
+#define WFQ_CODEL 6
 #define FQ_CODEL_TARGET (1 * 1000)
 #define FQ_CODEL_CETHRESH (5 * 1000)
 
@@ -49,6 +50,8 @@
  #endif
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
  #if QTYPE == FIFO
+ #elif QTYPE == WFQ_CODEL
+ #include "4.19/sch_wfq_codel.c"
  #elif QTYPE == FQ_CODEL
  #include "4.19/sch_fq_codel.c"
  #elif QTYPE == SFQ
@@ -500,6 +503,16 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt,
  #endif
   //codel_q->cparams.target = (FQ_CODEL_TARGET * NSEC_PER_USEC) >> CODEL_SHIFT;
   //codel_q->cparams.ce_threshold = (FQ_CODEL_CETHRESH * NSEC_PER_USEC) >> CODEL_SHIFT;
+#elif QTYPE == WFQ_CODEL
+  pr_info("[bunde_inbox_init] inner_queue_type wfq_codel");
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
+  q = NULL; // TODO backport
+ #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
+  q = qdisc_create_dflt(sch->dev_queue,
+      &fq_codel_qdisc_ops,
+      TC_H_MAKE(sch->handle, 1),
+      extack);
+ #endif
 #elif QTYPE == FQ
   pr_info("[bunde_inbox_init] inner_queue_type fq");
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
@@ -544,6 +557,7 @@ struct Qdisc *create_inner_qdisc(struct Qdisc *sch, struct tc_tbf_qopt *qopt,
 int update_inner_qdisc_limit(struct Qdisc *q, unsigned int limit) {
 #if QTYPE == FIFO
   return fifo_set_limit(q, limit);
+#elif QTYPE == WFQ_CODEL
 #elif QTYPE == FQ_CODEL
   // TODO
 #elif QTYPE == FQ
@@ -895,6 +909,8 @@ static int __init tbf_module_init(void)
 	pr_info("bundle_inbox: fifo\n");
 #elif QTYPE == FQ_CODEL
 	pr_info("bundle_inbox: fq_codel\n");
+#elif QTYPE == WFQ_CODEL
+	pr_info("bundle_inbox: wfq_codel\n");
 #elif QTYPE == SFQ
 	pr_info("bundle_inbox: sfq\n");
 #elif QTYPE == PRIO
