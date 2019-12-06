@@ -391,7 +391,7 @@ static const struct nla_policy fq_codel_policy[TCA_FQ_CODEL_MAX + 1] = {
   [TCA_FQ_CODEL_MEMORY_LIMIT] = { .type = NLA_U32 },
 };
 
-static int fq_codel_change(struct Qdisc *sch, struct nlattr *opt)
+static int fq_codel_change(struct Qdisc *sch, struct nlattr *opt, struct netlink_ext_ack *extack)
 {
   struct fq_codel_sched_data *q = qdisc_priv(sch);
   struct nlattr *tb[TCA_FQ_CODEL_MAX + 1];
@@ -472,7 +472,7 @@ static void fq_codel_destroy(struct Qdisc *sch)
   kvfree(q->flows);
 }
 
-static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
+static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt, struct netlink_ext_ack *extack)
 {
   struct fq_codel_sched_data *q = qdisc_priv(sch);
   int i;
@@ -492,12 +492,12 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
   q->num_backlogged_flows = 0;
 
   if (opt) {
-    int err = fq_codel_change(sch, opt);
+    int err = fq_codel_change(sch, opt, extack);
     if (err)
       return err;
   }
 
-  err = tcf_block_get(&q->block, &q->filter_list, sch);
+  err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
   if (err)
     return err;
 
@@ -610,7 +610,7 @@ static void fq_codel_unbind(struct Qdisc *q, unsigned long cl)
 {
 }
 
-static struct tcf_block *fq_codel_tcf_block(struct Qdisc *sch, unsigned long cl)
+static struct tcf_block *fq_codel_tcf_block(struct Qdisc *sch, unsigned long cl, struct netlink_ext_ack *extack)
 {
   struct fq_codel_sched_data *q = qdisc_priv(sch);
 
