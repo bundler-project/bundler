@@ -1,5 +1,9 @@
 use crate::inbox::udp;
-use crate::serialize::OutBoxFeedbackMsg;
+use crate::serialize::{
+    OutBoxFeedbackMsg, QDiscFeedbackMsg, QDiscPrioMsg, QDiscRecvMsgs, QDISC_PRIO_MSG_TYPE,
+    QDISC_UPDATE_MSG_TYPE,
+};
+use bytes::{ByteOrder, LittleEndian};
 use minion::Cancellable;
 use portus::ipc;
 use slog::warn;
@@ -13,17 +17,14 @@ use portus::ipc::netlink;
 pub struct NlMsgReader(
     netlink::Socket<ipc::Blocking>,
     Vec<u8>,
-    crossbeam::Sender<crate::serialize::QDiscFeedbackMsg>,
+    crossbeam::Sender<crate::serialize::QDiscRecvMsgs>,
 );
 
 #[cfg(target_os = "linux")]
 impl NlMsgReader {
     pub fn make(
         nl: netlink::Socket<ipc::Blocking>,
-    ) -> (
-        Self,
-        crossbeam::Receiver<crate::serialize::QDiscFeedbackMsg>,
-    ) {
+    ) -> (Self, crossbeam::Receiver<crate::serialize::QDiscRecvMsgs>) {
         let (send, recv) = crossbeam::unbounded();
         let s = NlMsgReader(nl, vec![0u8; 100], send);
         (s, recv)
@@ -36,8 +37,16 @@ impl Cancellable for NlMsgReader {
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
         self.0.recv(&mut self.1[0..100])?;
-        let m = crate::serialize::QDiscFeedbackMsg::from_slice(&self.1[0..32]);
-        self.2.send(m)?;
+        let msg_type = LittleEndian::read_u32(&self.1[0..4]);
+        self.2.send(match msg_type {
+            QDISC_UPDATE_MSG_TYPE => {
+                QDiscRecvMsgs::BundleFeedback(QDiscFeedbackMsg::from_slice(&self.1[0..32]))
+            }
+            QDISC_PRIO_MSG_TYPE => {
+                QDiscRecvMsgs::FlowPrio(QDiscPrioMsg::from_slice(&self.1[0..32]))
+            }
+            _ => unreachable!(),
+        })?;
         Ok(minion::LoopState::Continue)
     }
 }

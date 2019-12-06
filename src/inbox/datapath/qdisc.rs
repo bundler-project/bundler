@@ -5,7 +5,7 @@ use portus::ipc;
 use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use slog;
-use slog::{trace, debug, info};
+use slog::{debug, trace};
 use std::cmp::min;
 
 use super::get_epoch_length;
@@ -89,6 +89,7 @@ impl Datapath for Qdisc {
         }
 
         let msg = QDiscUpdateMsg {
+            msg_type: crate::serialize::QDISC_UPDATE_MSG_TYPE,
             bundle_id: 42,
             sample_rate: epoch_length_packets,
         };
@@ -120,8 +121,8 @@ impl Qdisc {
         outbox_report: std::net::UdpSocket,
     ) -> Result<Self, failure::Error> {
         unsafe {
-            let mut all_links: *mut nl_cache = std::mem::uninitialized();
-            let mut all_qdiscs: *mut nl_cache = std::mem::uninitialized();
+            let mut all_links: *mut nl_cache = std::ptr::null_mut();
+            let mut all_qdiscs: *mut nl_cache = std::ptr::null_mut();
 
             let rtnl_sock = nl_socket_alloc();
             nl_connect(rtnl_sock, NETLINK_ROUTE as i32);

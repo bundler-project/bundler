@@ -9,7 +9,7 @@ use self::datapath::qdisc::*;
 use self::datapath::Datapath;
 use self::flow_state::BundleFlowState;
 use self::readers::UnixMsgReader;
-use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
+use crate::serialize::{OutBoxFeedbackMsg, QDiscRecvMsgs};
 use crossbeam::select;
 use minion::Cancellable;
 use slog::{debug, info};
@@ -90,7 +90,7 @@ where
     Q: Datapath + 'static,
 {
     log: slog::Logger,
-    qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
+    qdisc_recv: crossbeam::Receiver<QDiscRecvMsgs>,
     outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
     // Do not allow a reference to flow_state to escape.
     // Doing so would be unsafe, because the lifetime is
@@ -166,7 +166,7 @@ impl Runtime<Qdisc> {
 impl<Q: Datapath> Runtime<Q> {
     pub fn with_qdisc(
         qdisc: Rc<RefCell<Q>>,
-        qdisc_recv: crossbeam::Receiver<QDiscFeedbackMsg>,
+        qdisc_recv: crossbeam::Receiver<QDiscRecvMsgs>,
         outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
         log: slog::Logger,
     ) -> Option<Self> {
@@ -237,20 +237,26 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
         select! {
             recv(self.qdisc_recv) -> msg => {
-                if let Ok(msg) = msg {
-                    // remember the marked packet's send time
-                    // so we can get its RTT later
-                    // TODO -- this might need to get the current time instead of using the
-                    // kernel's
-                    debug!(self.log, "inbox epoch";
-                        "time" => msg.epoch_time,
-                        "hash" => msg.marked_packet_hash,
-                        "bytes" => msg.epoch_bytes,
-                        "curr_qlen" => msg.curr_qlen,
-                    );
+                match msg {
+                    Ok(QDiscRecvMsgs::BundleFeedback(msg)) => {
+                        // remember the marked packet's send time
+                        // so we can get its RTT later
+                        // TODO -- this might need to get the current time instead of using the
+                        // kernel's
+                        debug!(self.log, "inbox epoch";
+                            "time" => msg.epoch_time,
+                            "hash" => msg.marked_packet_hash,
+                            "bytes" => msg.epoch_bytes,
+                            "curr_qlen" => msg.curr_qlen,
+                        );
 
-                    self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
-                    self.flow_state.curr_qlen = msg.curr_qlen;
+                        self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
+                        self.flow_state.curr_qlen = msg.curr_qlen;
+                    }
+                    Ok(QDiscRecvMsgs::FlowPrio(_msg)) => {
+                        unimplemented!();
+                    }
+                    _ => (),
                 }
             },
             recv(self.outbox_recv) -> msg => {

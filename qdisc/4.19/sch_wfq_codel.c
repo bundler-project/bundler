@@ -49,7 +49,8 @@ struct fq_codel_flow {
   struct sk_buff    *tail;
   struct list_head  flowchain;
   int      deficit;
-  u32      dropped; /* number of drops (or ECN marks) on this flow */
+  u16      weight; /* Current weight of the flow */
+  u16      dropped; /* number of drops (or ECN marks) on this flow */
   struct codel_vars cvars;
 }; /* please try to keep this structure <= 64 bytes */
 
@@ -221,6 +222,7 @@ static int fq_codel_enqueue(struct sk_buff *skb, struct Qdisc *sch,
     list_add_tail(&flow->flowchain, &q->new_flows);
     q->new_flow_count++;
     flow->deficit = q->quantum;
+    flow->weight = 1;
     flow->dropped = 0;
   }
   get_codel_cb(skb)->mem_usage = skb->truesize;
@@ -313,7 +315,14 @@ begin:
 
   // if this flow can't send yet, update its credits and move on to the next flow
   if (flow->deficit <= 0) {
-    flow->deficit += q->quantum;
+    // enforce weight here:
+    // deficit += quantum is fq
+    // so increase deficit by quantum * weight for wfq
+    if (flow->weight == 0) {
+        flow->weight = 1;
+    }
+
+    flow->deficit += flow->weight * q->quantum;
     list_move_tail(&flow->flowchain, &q->old_flows);
     goto begin;
   }
