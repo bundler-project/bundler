@@ -1,17 +1,3 @@
-/*
- * net/sched/sch_tbf.c  Token Bucket Filter queue.
- *
- *    This program is free software; you can redistribute it and/or
- *    modify it under the terms of the GNU General Public License
- *    as published by the Free Software Foundation; either version
- *    2 of the License, or (at your option) any later version.
- *
- * Authors:  Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
- *    Dmitry Torokhov <dtor@mail.ru> - allow attaching inner qdiscs -
- *             original idea by Martin Devera
- *
- */
-
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -39,6 +25,59 @@
 #error QTYPE must be defined
 #endif
 
+// Mark 1 out of every 100 packets, on average
+#define PACKET_SAMPLE_RATE 100
+
+struct tbf_sched_data *sch_bundle_inbox_q;
+static uint32_t hash_header(unsigned char *dst_ip, unsigned char *ports, unsigned char *ipid);
+void send_to_dp(struct tbf_sched_data *q, char *msg, int msg_size);
+
+struct __attribute__((packed, aligned(4))) PrioMsg {
+    u32 msg_type;
+    u32 bundle_id;
+    u32 flow_id;
+    u32 src_ip;
+    u16 src_port;
+    u32 dst_ip;
+    u16 dst_port;
+};
+
+/*
+ * randomly sample the flow, if match, then report it for a weight.
+ * have to define this at the top so the inner qdiscs can use it.
+ */
+static int maybe_report_flow(struct sk_buff *skb, unsigned int flow_id) {
+  struct iphdr *ip_header;
+  unsigned char *transport_header; 
+  uint32_t hash;
+
+  if (sch_bundle_inbox_q == NULL) {
+    return -1;
+  }
+
+  transport_header = skb_transport_header(skb);
+  if (transport_header) {
+    ip_header = (struct iphdr *)skb_network_header(skb);
+    hash = hash_header((unsigned char*) &(ip_header->daddr), transport_header, (unsigned char*) &(ip_header->id));
+    if (hash % PACKET_SAMPLE_RATE == 0) {
+      // maybe is now
+      struct PrioMsg pmsg = {
+        .msg_type = 4,
+        .bundle_id = 42,
+        .flow_id = flow_id,
+        .src_ip = ip_header->saddr,
+        .src_port = *transport_header,
+        .dst_ip = ip_header->daddr,
+        .dst_port = *(transport_header + 2),
+      };
+
+      send_to_dp(sch_bundle_inbox_q, (char *)&pmsg, sizeof(struct PrioMsg));
+    }
+  }
+
+  return 0;
+}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0) && LINUX_VERSION_CODE <= KERNEL_VERSION(4,16,0)
  #if QTYPE == FIFO
  #elif QTYPE == FQ_CODEL
@@ -64,87 +103,11 @@
 #error
 #endif
 
-/*  Simple Token Bucket Filter.
-  =======================================
-
-  SOURCE.
-  -------
-
-  None.
-
-  Description.
-  ------------
-
-  A data flow obeys TBF with rate R and depth B, if for any
-  time interval t_i...t_f the number of transmitted bits
-  does not exceed B + R*(t_f-t_i).
-
-  Packetized version of this definition:
-  The sequence of packets of sizes s_i served at moments t_i
-  obeys TBF, if for any i<=k:
-
-  s_i+....+s_k <= B + R*(t_k - t_i)
-
-  Algorithm.
-  ----------
-
-  Let N(t_i) be B/R initially and N(t) grow continuously with time as:
-
-  N(t+delta) = min{B/R, N(t) + delta}
-
-  If the first packet in queue has length S, it may be
-  transmitted only at the time t_* when S/R <= N(t_*),
-  and in this case N(t) jumps:
-
-  N(t_* + 0) = N(t_* - 0) - S/R.
-
-
-
-  Actually, QoS requires two TBF to be applied to a data stream.
-  One of them controls steady state burst size, another
-  one with rate P (peak rate) and depth M (equal to link MTU)
-  limits bursts at a smaller time scale.
-
-  It is easy to see that P>R, and B>M. If P is infinity, this double
-  TBF is equivalent to a single one.
-
-  When TBF works in reshaping mode, latency is estimated as:
-
-  lat = max ((L-B)/R, (L-M)/P)
-
-
-  NOTES.
-  ------
-
-  If TBF throttles, it starts a watchdog timer, which will wake it up
-  when it is ready to transmit.
-  Note that the minimal timer resolution is 1/HZ.
-  If no new packets arrive during this period,
-  or if the device is not awaken by EOI for some previous packet,
-  TBF can stop its activity for 1/HZ.
-
-
-  This means, that with depth B, the maximal rate is
-
-  R_crit = B*HZ
-
-  F.e. for 10Mbit ethernet and HZ=100 the minimal allowed B is ~10Kbytes.
-
-  Note that the peak rate TBF is much more tough: with MTU 1500
-  P_crit = 150Kbytes/sec. So, if you need greater peak
-  rates, use alpha with HZ=1000 :-)
-
-  With classful TBF, limit is just kept for backwards compatibility.
-  It is passed to the default bfifo qdisc - if the inner qdisc is
-  changed the limit is not effective anymore.
-*/
-
 #define BUNDLE_GROUP 22
 #define NETLINK_USER 30
-// Mark 1 out of every 100 packets, on average
-#define PACKET_SAMPLE_RATE 100
 
 struct __attribute__((packed, aligned(4))) FeedbackMsg {
+    u32 msg_type;
 	u32 bundle_id;
 	u32 marked_packet_hash;
     u32 curr_qlen;
@@ -406,6 +369,7 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
           hash = hash_header((unsigned char*) &(ip_header->daddr), transport_header, (unsigned char*) &(ip_header->id));
           if (hash % q->epoch_sample_rate == 0) {
               struct FeedbackMsg fmsg = {
+                  .msg_type = 1,
                   .bundle_id = 42,
                   .marked_packet_hash = hash,
                   .curr_qlen = sch->q.qlen,
@@ -707,26 +671,47 @@ done:
 }
 
 
-struct __attribute__((packed, aligned(4))) QDiscUpdateMsg {
+struct __attribute__((packed, aligned(4))) UpdateSampleRateMsg {
+    u32 msg_type;
     u32 bundle_id;
     u32 sample_rate;
 };
 
-struct tbf_sched_data *sch_bundle_inbox_q;
+struct __attribute__((packed, aligned(4))) UpdatePrioMsg {
+    u32 msg_type;
+    u32 bundle_id;
+    u32 flow_id;
+    u32 flow_prio;
+};
 
 void tbf_nl_recv_msg(struct sk_buff *skb) {
-    struct QDiscUpdateMsg msg;
+    u32 msg_type;
+    struct UpdateSampleRateMsg sample_rate_msg;
+    struct UpdatePrioMsg prio_msg;
     struct nlmsghdr *nlh = nlmsg_hdr(skb);
 
     if (sch_bundle_inbox_q == NULL) {
         return;
     }
 
-    memcpy(&msg, nlmsg_data(nlh), sizeof(struct QDiscUpdateMsg));
-    if (msg.sample_rate != 0) {
-        pr_info("[sch_bundle_inbox] epoch_len %u\n", msg.sample_rate);
-        sch_bundle_inbox_q->epoch_sample_rate = msg.sample_rate;
+    memcpy(&msg_type, nlmsg_data(nlh), sizeof(u32));
+    if (msg_type == 1) { // UpdateSampleRateMsg
+        memcpy(&sample_rate_msg, nlmsg_data(nlh), sizeof(struct UpdateSampleRateMsg));
+        if (sample_rate_msg.sample_rate != 0) {
+            pr_info("[sch_bundle_inbox] epoch_len %u\n", sample_rate_msg.sample_rate);
+            sch_bundle_inbox_q->epoch_sample_rate = sample_rate_msg.sample_rate;
+        }
+    } else if (msg_type == 2) { // UpdatePrioMsg
+        memcpy(&prio_msg, nlmsg_data(nlh), sizeof(struct UpdatePrioMsg));
+        if (prio_msg.msg_type != 2)  {
+            return;
+        }
+
+#ifdef BUNDLER_SET_FLOW_PRIO
+        bundler_update_flow_weight(sch_bundle_inbox_q->qdisc, prio_msg.flow_id, prio_msg.flow_prio);
+#endif
     }
+
     return;
 }
 

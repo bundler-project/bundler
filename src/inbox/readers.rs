@@ -39,7 +39,7 @@ impl Cancellable for NlMsgReader {
         self.0.recv(&mut self.1[0..100])?;
         let msg_type = LittleEndian::read_u32(&self.1[0..4]);
         self.2.send(match msg_type {
-            QDISC_UPDATE_MSG_TYPE => {
+            QDISC_FEEDBACK_MSG_TYPE => {
                 QDiscRecvMsgs::BundleFeedback(QDiscFeedbackMsg::from_slice(&self.1[0..32]))
             }
             QDISC_PRIO_MSG_TYPE => {
