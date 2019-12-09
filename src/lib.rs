@@ -11,6 +11,7 @@ extern crate slog;
 pub mod hash;
 pub mod inbox;
 pub mod outbox;
+pub mod prio;
 pub mod serialize;
 
 // Header lengths

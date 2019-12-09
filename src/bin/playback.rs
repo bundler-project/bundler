@@ -158,6 +158,7 @@ impl minion::Cancellable for InboxCapturePlayer {
                         "hash" => hash,
                     );
                     let msg = bundler::serialize::QDiscFeedbackMsg {
+                        msg_type: bundler::serialize::QDISC_FEEDBACK_MSG_TYPE,
                         bundle_id: 42,
                         marked_packet_hash: hash,
                         curr_qlen: 100,
@@ -249,13 +250,21 @@ fn start_outbox<T: pcap::Activated + Send + 'static>(
     });
 }
 
+struct NonPrio;
+
+impl bundler::prio::Prioritizer for NonPrio {
+    fn assign_priority(&mut self, _: bundler::prio::FlowInfo) -> u16 {
+        1
+    }
+}
+
 fn new_inbox_runtime(
     log: slog::Logger,
     qdisc_recv: crossbeam::Receiver<bundler::serialize::QDiscRecvMsgs>,
     outbox_recv: crossbeam::Receiver<bundler::serialize::OutBoxFeedbackMsg>,
     outbox_report: mpsc::Sender<bundler::serialize::OutBoxReportMsg>,
     qdisc_ctl: mpsc::Sender<u32>,
-) -> Option<bundler::inbox::Runtime<FakeInboxQdisc>> {
+) -> Option<bundler::inbox::Runtime<FakeInboxQdisc, NonPrio>> {
     let qdisc: FakeInboxQdisc = FakeInboxQdisc {
         cwnd_bytes: 0,
         rate_bytes_per_sec: 0,
@@ -267,7 +276,7 @@ fn new_inbox_runtime(
         qdisc_ctl,
     };
     let qdisc = Rc::new(RefCell::new(qdisc));
-    bundler::inbox::Runtime::with_qdisc(qdisc, qdisc_recv, outbox_recv, log)
+    bundler::inbox::Runtime::with_qdisc(qdisc, None, qdisc_recv, outbox_recv, log)
 }
 
 /// Does nothing - the actual "qdisc" functionality is based on the pcap trace
@@ -329,6 +338,10 @@ impl bundler::inbox::datapath::Datapath for FakeInboxQdisc {
             self.min_rtt_ns as f64 / 1e9,
         );
         self.set_epoch_length(epoch_length).unwrap_or_else(|_| ());
+    }
+
+    fn update_flow_prio(&mut self, _: u32, _: u16) -> Result<(), portus::Error> {
+        Ok(())
     }
 
     fn get_curr_epoch_length(&self) -> u32 {

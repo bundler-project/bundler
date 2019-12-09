@@ -1,7 +1,7 @@
 use crate::inbox::udp;
 use crate::serialize::{
-    OutBoxFeedbackMsg, QDiscFeedbackMsg, QDiscPrioMsg, QDiscRecvMsgs, QDISC_PRIO_MSG_TYPE,
-    QDISC_UPDATE_MSG_TYPE,
+    OutBoxFeedbackMsg, QDiscFeedbackMsg, QDiscPrioMsg, QDiscRecvMsgs, QDISC_FEEDBACK_MSG_TYPE,
+    QDISC_PRIO_MSG_TYPE,
 };
 use bytes::{ByteOrder, LittleEndian};
 use minion::Cancellable;

@@ -9,11 +9,17 @@ use self::datapath::qdisc::*;
 use self::datapath::Datapath;
 use self::flow_state::BundleFlowState;
 use self::readers::UnixMsgReader;
-use crate::serialize::{OutBoxFeedbackMsg, QDiscRecvMsgs};
+use crate::prio::{FlowInfo, Prioritizer};
+use crate::serialize::{OutBoxFeedbackMsg, QDiscPrioMsg, QDiscRecvMsgs};
 use crossbeam::select;
+use crossbeam::tick;
 use minion::Cancellable;
 use slog::{debug, info};
+use std::cell::RefCell;
 use std::os::unix::net::UnixDatagram;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 use self::readers::NlMsgReader;
@@ -79,13 +85,7 @@ impl<Q: Datapath> libccp::CongestionOps for ConnectionImpl<Q> {
     }
 }
 
-use crossbeam::tick;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-pub struct Runtime<Q>
+pub struct Runtime<Q, P>
 where
     Q: Datapath + 'static,
 {
@@ -98,6 +98,7 @@ where
     // as the lifetime of Arc<libccp::Datapath>.
     flow_state: BundleFlowState<'static, Q>,
     qdisc: Rc<RefCell<Q>>,
+    prioritizer: Option<P>,
     invoke_ticker: crossbeam::Receiver<Instant>,
     ready_to_invoke: bool,
     // Must come last. Since Drop on libccp::Datapath frees
@@ -109,14 +110,15 @@ where
 }
 
 // This prevents `Runtime` from being destructured, which could cause `flow_state` to escape.
-impl<Q: Datapath> Drop for Runtime<Q> {
+impl<Q: Datapath, P> Drop for Runtime<Q, P> {
     fn drop(&mut self) {}
 }
 
 #[cfg(target_os = "linux")]
-impl Runtime<Qdisc> {
+impl<P> Runtime<Qdisc, P> {
     pub fn new(
         log: slog::Logger,
+        prioritizer: Option<P>,
         listen_port: u16,
         outbox: Option<String>,
         iface: String,
@@ -159,13 +161,14 @@ impl Runtime<Qdisc> {
         qdisc.set_epoch_length(sample_freq).unwrap_or_else(|_| ());
 
         let qdisc = Rc::new(RefCell::new(qdisc));
-        Runtime::with_qdisc(qdisc, qdisc_recv, outbox_recv, log)
+        Runtime::with_qdisc(qdisc, prioritizer, qdisc_recv, outbox_recv, log)
     }
 }
 
-impl<Q: Datapath> Runtime<Q> {
+impl<Q: Datapath, P> Runtime<Q, P> {
     pub fn with_qdisc(
         qdisc: Rc<RefCell<Q>>,
+        prioritizer: Option<P>,
         qdisc_recv: crossbeam::Receiver<QDiscRecvMsgs>,
         outbox_recv: crossbeam::Receiver<OutBoxFeedbackMsg>,
         log: slog::Logger,
@@ -224,6 +227,7 @@ impl<Q: Datapath> Runtime<Q> {
             outbox_recv,
             flow_state: fs,
             qdisc,
+            prioritizer,
             invoke_ticker,
             ready_to_invoke: false,
             datapath: dp,
@@ -231,7 +235,26 @@ impl<Q: Datapath> Runtime<Q> {
     }
 }
 
-impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
+impl<Q: Datapath, P: Prioritizer> Runtime<Q, P> {
+    fn handle_prio_msg(&mut self, msg: QDiscPrioMsg) {
+        if let Some(ref mut p) = self.prioritizer {
+            let f = FlowInfo {
+                src_ip: msg.src_ip,
+                src_port: msg.src_port,
+                dst_ip: msg.dst_ip,
+                dst_port: msg.dst_port,
+            };
+
+            let wt = p.assign_priority(f);
+            {
+                let mut q = self.qdisc.borrow_mut();
+                q.update_flow_prio(msg.flow_id, wt).unwrap_or_else(|_| ());
+            }
+        }
+    }
+}
+
+impl<Q: Datapath, P: Prioritizer> minion::Cancellable for Runtime<Q, P> {
     type Error = portus::Error;
 
     fn for_each(&mut self) -> std::result::Result<minion::LoopState, Self::Error> {
@@ -253,9 +276,8 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                         self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                         self.flow_state.curr_qlen = msg.curr_qlen;
                     }
-                    Ok(QDiscRecvMsgs::FlowPrio(_msg)) => {
-                        // TODO api for this
-                        unimplemented!();
+                    Ok(QDiscRecvMsgs::FlowPrio(msg)) => {
+                        self.handle_prio_msg(msg);
                     }
                     _ => (),
                 }
