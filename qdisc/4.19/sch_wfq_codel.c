@@ -342,6 +342,13 @@ begin:
         flow->weight = 1;
     }
 
+    // TODO fix this, it will cause exceeding the pacing rate
+    // will this actually happen?
+    // this function is only called when the bundler qdisc calls dequeue, which happens
+    // at the dynamic pacing rate.
+    //
+    // ahmed's suggestion: change flow indices in the data structure to 
+    // reflect the new flow pacing rate
     flow->deficit += flow->weight * q->quantum;
     list_move_tail(&flow->flowchain, &q->old_flows);
     goto begin;
