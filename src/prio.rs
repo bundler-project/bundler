@@ -1,5 +1,6 @@
 //! API for specifying priority policy
 
+#[derive(Debug, Clone, Copy)]
 pub struct FlowInfo {
     pub src_ip: u32,
     pub src_port: u16,

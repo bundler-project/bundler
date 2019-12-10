@@ -245,6 +245,11 @@ impl<Q: Datapath, P: Prioritizer> Runtime<Q, P> {
                 dst_port: msg.dst_port,
             };
 
+            debug!(self.log, "flow prio sample";
+                "flow_id" => msg.flow_id,
+                "flow_info" => ?f,
+            );
+
             let wt = p.assign_priority(f);
             {
                 let mut q = self.qdisc.borrow_mut();
