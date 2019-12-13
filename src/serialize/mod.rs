@@ -181,7 +181,7 @@ impl QDiscPrioMsg {
 
     pub fn from_slice(buf: &[u8]) -> Self {
         Self {
-            msg_type: QDISC_PRIO_MSG_TYPE,
+            msg_type: LittleEndian::read_u32(&buf[0..4]),
             bundle_id: LittleEndian::read_u32(&buf[4..8]),
             flow_id: LittleEndian::read_u32(&buf[8..12]),
             src_ip: LittleEndian::read_u32(&buf[12..16]),

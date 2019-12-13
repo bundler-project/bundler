@@ -238,12 +238,7 @@ impl<Q: Datapath, P> Runtime<Q, P> {
 impl<Q: Datapath, P: Prioritizer> Runtime<Q, P> {
     fn handle_prio_msg(&mut self, msg: QDiscPrioMsg) {
         if let Some(ref mut p) = self.prioritizer {
-            let f = FlowInfo {
-                src_ip: msg.src_ip,
-                src_port: msg.src_port,
-                dst_ip: msg.dst_ip,
-                dst_port: msg.dst_port,
-            };
+            let f = FlowInfo::new(msg.src_ip, msg.src_port, msg.dst_ip, msg.dst_port);
 
             debug!(self.log, "flow prio sample";
                 "flow_id" => msg.flow_id,

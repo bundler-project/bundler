@@ -275,7 +275,7 @@ struct Prio {
 
 impl bundler::prio::Prioritizer for Prio {
     fn assign_priority(&mut self, flow: bundler::prio::FlowInfo) -> u16 {
-        trace!(self.log, "Flow Priority"; "src_ip" => flow.src_ip, "src_port" => flow.src_port, "dst_ip" => flow.dst_ip, "dst_port" => flow.dst_port);
+        trace!(self.log, "Flow Priority"; "flow" => ?flow);
 
         if let Some(p) = self.port {
             if flow.dst_port == p {
