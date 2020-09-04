@@ -71,9 +71,9 @@ pub fn unpack_ips(pkt: &[u8], ip_header_start: usize) -> (std::net::Ipv4Addr, st
 }
 
 pub fn unpack_ports(pkt: &[u8], tcp_header_start: usize) -> (u16, u16) {
-    use bytes::{ByteOrder, LittleEndian};
+    use bytes::{BigEndian, ByteOrder};
     (
-        LittleEndian::read_u16(&pkt[tcp_header_start..tcp_header_start + 2]),
-        LittleEndian::read_u16(&pkt[tcp_header_start + 2..tcp_header_start + 4]),
+        BigEndian::read_u16(&pkt[tcp_header_start..tcp_header_start + 2]),
+        BigEndian::read_u16(&pkt[tcp_header_start + 2..tcp_header_start + 4]),
     )
 }
