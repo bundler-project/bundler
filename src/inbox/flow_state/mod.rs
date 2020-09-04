@@ -1,13 +1,49 @@
 use crate::inbox::ConnectionImpl;
 use crate::serialize::OutBoxFeedbackMsg;
-use slog::info;
+use slog::{debug, info};
 
 mod marks;
 use self::marks::{Epoch, EpochHistory, MarkHistory, MarkedInstant};
 
+pub struct LibccpConn<'dp, Q: crate::inbox::datapath::Datapath + 'static>(
+    libccp::Connection<'dp, ConnectionImpl<Q>>,
+);
+
+impl<'dp, Q: crate::inbox::datapath::Datapath> std::ops::Deref for LibccpConn<'dp, Q> {
+    type Target = libccp::Connection<'dp, ConnectionImpl<Q>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<'dp, Q: crate::inbox::datapath::Datapath> std::ops::DerefMut for LibccpConn<'dp, Q> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<'dp, Q: crate::inbox::datapath::Datapath> LibccpConn<'dp, Q> {
+    pub fn new(c: libccp::Connection<'dp, ConnectionImpl<Q>>) -> Self {
+        Self(c)
+    }
+
+    pub fn did_invoke(&mut self, fs: &BundleFlowState) {
+        // set primitives
+        self.0.load_primitives(
+            libccp::Primitives::default()
+                .with_rate_outgoing(fs.send_rate as u64)
+                .with_rate_incoming(fs.recv_rate as u64)
+                .with_rtt_sample_us(fs.rtt_estimate / 1_000)
+                .with_bytes_acked(fs.acked_bytes)
+                .with_packets_acked(fs.acked_bytes / 1514)
+                .with_lost_pkts_sample(fs.lost_bytes / 1514)
+                .with_bytes_pending(fs.curr_qlen), // quick hack
+        );
+    }
+}
+
 /// Calculate and maintain flow measurements.
-pub struct BundleFlowState<'dp, Q: crate::inbox::datapath::Datapath + 'static> {
-    pub conn: Option<libccp::Connection<'dp, ConnectionImpl<Q>>>,
+#[derive(Debug, Clone)]
+pub struct BundleFlowState {
     pub marked_packets: MarkHistory,
     pub epoch_history: EpochHistory,
 
@@ -25,12 +61,13 @@ pub struct BundleFlowState<'dp, Q: crate::inbox::datapath::Datapath + 'static> {
     pub lost_bytes: u32,
 
     pub curr_qlen: u32,
+
+    pub last_id: usize,
 }
 
-impl<'dp, Q: crate::inbox::datapath::Datapath> Default for BundleFlowState<'dp, Q> {
+impl Default for BundleFlowState {
     fn default() -> Self {
         BundleFlowState {
-            conn: None,
             marked_packets: Default::default(),
             epoch_history: Default::default(),
             prev_send_time: Default::default(),
@@ -44,11 +81,24 @@ impl<'dp, Q: crate::inbox::datapath::Datapath> Default for BundleFlowState<'dp, 
             acked_bytes: Default::default(),
             lost_bytes: Default::default(),
             curr_qlen: Default::default(),
+            last_id: Default::default(),
         }
     }
 }
 
-impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
+impl BundleFlowState {
+    //pub fn new_measurements(
+    //    self,
+    //    now: u64,
+    //    sent_mark: MarkedInstant,
+    //    recv_mark: OutBoxFeedbackMsg,
+    //    logger: &slog::Logger,
+    //) -> Self {
+    //    let mut new = self.clone();
+    //    new.update_measurements(now, sent_mark, recv_mark, logger);
+    //    new
+    //}
+
     ///
     /// s1  |\   A       |
     ///     | -------    |
@@ -86,13 +136,13 @@ impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
         let r2_bytes = recv_mark.epoch_bytes;
 
         // rtt is current time - sent mark time
-        self.rtt_estimate = now.saturating_sub(s2);
+        let rtt_estimate = now.saturating_sub(s2);
 
-        let send_epoch_ns = s2 - s1;
-        let recv_epoch_ns = r2 - r1;
+        let send_epoch_ns: u64 = s2.saturating_sub(s1);
+        let recv_epoch_ns: u64 = r2.saturating_sub(r1);
 
-        let send_epoch_bytes = s2_bytes - s1_bytes;
-        let recv_epoch_bytes = r2_bytes - r1_bytes;
+        let send_epoch_bytes: u64 = s2_bytes.saturating_sub(s1_bytes);
+        let recv_epoch_bytes: u64 = r2_bytes.saturating_sub(r1_bytes);
 
         let (send_rate, recv_rate) = self.epoch_history.got_epoch(
             Epoch {
@@ -107,52 +157,48 @@ impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
         //let send_rate = send_epoch_bytes as f64 / (send_epoch_ns as f64 / 1e9);
         //let recv_rate = recv_epoch_bytes as f64 / (recv_epoch_ns as f64 / 1e9);
 
-        self.send_rate = send_rate;
-        self.recv_rate = recv_rate;
-
-        info!(logger, "epochs";
-            "send_epoch_bytes" => send_epoch_bytes,
-            "send_epoch_ns" => send_epoch_ns,
-            "recv_epoch_bytes" => recv_epoch_bytes,
-            "recv_epoch_ns" => recv_epoch_ns,
-            "epoch_window" => self.epoch_history.window,
-        );
-
-        let rtt_s = self.rtt_estimate as f64 / 1e9;
+        //info!(logger, "epochs";
+        //    "send_epoch_bytes" => send_epoch_bytes,
+        //    "send_epoch_ns" => send_epoch_ns,
+        //    "recv_epoch_bytes" => recv_epoch_bytes,
+        //    "recv_epoch_ns" => recv_epoch_ns,
+        //    "epoch_window" => self.epoch_history.window,
+        //);
+        let rtt_s = rtt_estimate as f64 / 1e9;
         let bdp_estimate_bytes = send_rate as f64 * rtt_s;
-        self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
-        self.acked_bytes = recv_epoch_bytes as u32;
         let delta = send_epoch_bytes.saturating_sub(recv_epoch_bytes);
-        self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
 
-        // s2 now becomes s1 and r2 becomes r1
-        self.prev_send_time = s2;
-        self.prev_send_byte_clock = s2_bytes;
-        self.prev_recv_time = r2;
-        self.prev_recv_byte_clock = r2_bytes;
+        if !sent_mark.late {
+            self.send_rate = send_rate;
+            self.recv_rate = recv_rate;
 
-        self.update_primitives()
+            self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
+            self.acked_bytes = recv_epoch_bytes as u32;
+            self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
+
+            self.rtt_estimate = rtt_estimate;
+            // s2 now becomes s1 and r2 becomes r1
+            self.prev_send_time = s2;
+            self.prev_send_byte_clock = s2_bytes;
+            self.prev_recv_time = r2;
+            self.prev_recv_byte_clock = r2_bytes;
+
+            self.last_id = sent_mark.id;
+        } else {
+            info!(logger, "ooo measurements";
+                "now" => now,
+                "prev_id" => self.last_id,
+                "id" => sent_mark.id,
+                "hash" => sent_mark.pkt_hash,
+                "rtt" => rtt_estimate / 1_000,
+                "rate_outgoing" => send_rate as u64,
+                "rate_incoming" => recv_rate as u64,
+            );
+        }
     }
 
     pub fn did_invoke(&mut self) {
         self.acked_bytes = 0;
         self.lost_bytes = 0;
-        self.update_primitives()
-    }
-
-    fn update_primitives(&mut self) {
-        // set primitives
-        if let Some(c) = self.conn.as_mut() {
-            c.load_primitives(
-                libccp::Primitives::default()
-                    .with_rate_outgoing(self.send_rate as u64)
-                    .with_rate_incoming(self.recv_rate as u64)
-                    .with_rtt_sample_us(self.rtt_estimate / 1_000)
-                    .with_bytes_acked(self.acked_bytes)
-                    .with_packets_acked(self.acked_bytes / 1514)
-                    .with_lost_pkts_sample(self.lost_bytes / 1514)
-                    .with_bytes_pending(self.curr_qlen), // quick hack
-            );
-        }
     }
 }

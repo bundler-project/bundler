@@ -7,7 +7,7 @@
 use self::datapath::qdisc::*;
 
 use self::datapath::Datapath;
-use self::flow_state::BundleFlowState;
+use self::flow_state::{BundleFlowState, LibccpConn};
 use self::readers::UnixMsgReader;
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 use crossbeam::select;
@@ -81,6 +81,7 @@ impl<Q: Datapath> libccp::CongestionOps for ConnectionImpl<Q> {
 
 use crossbeam::tick;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -96,7 +97,9 @@ where
     // Doing so would be unsafe, because the lifetime is
     // declared as 'static when it is actually the same
     // as the lifetime of Arc<libccp::Datapath>.
-    flow_state: BundleFlowState<'static, Q>,
+    flow_state: BundleFlowState,
+    epoch_map: HashMap<usize, BundleFlowState>,
+    conn: LibccpConn<'static, Q>,
     qdisc: Rc<RefCell<Q>>,
     invoke_ticker: crossbeam::Receiver<Instant>,
     ready_to_invoke: bool,
@@ -211,8 +214,9 @@ impl<Q: Datapath> Runtime<Q> {
         )
         .unwrap();
 
-        let mut fs: BundleFlowState<Q> = Default::default();
-        fs.conn = Some(conn);
+        let conn = LibccpConn::new(conn);
+        let mut fs: BundleFlowState = Default::default();
+
         fs.epoch_history.window = 1;
 
         let invoke_ticker = tick(Duration::from_millis(10));
@@ -223,6 +227,8 @@ impl<Q: Datapath> Runtime<Q> {
             qdisc_recv,
             outbox_recv,
             flow_state: fs,
+            epoch_map: HashMap::new(),
+            conn,
             qdisc,
             invoke_ticker,
             ready_to_invoke: false,
@@ -242,14 +248,15 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                     // so we can get its RTT later
                     // TODO -- this might need to get the current time instead of using the
                     // kernel's
+
+                    let epoch_id = self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                     debug!(self.log, "inbox epoch";
                         "time" => msg.epoch_time,
                         "hash" => msg.marked_packet_hash,
                         "bytes" => msg.epoch_bytes,
                         "curr_qlen" => msg.curr_qlen,
+                        "id" => epoch_id,
                     );
-
-                    self.flow_state.marked_packets.insert(msg.marked_packet_hash, msg.epoch_time, msg.epoch_bytes);
                     self.flow_state.curr_qlen = msg.curr_qlen;
                 }
             },
@@ -259,22 +266,53 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                     let now = time::precise_time_ns();
                     if let Some(mi) = self.flow_state.marked_packets.get(now, msg.marked_packet_hash) {
                         let h = msg.marked_packet_hash;
-                        self.flow_state.update_measurements(now, mi, msg, &self.log);
-                        {
-                            let mut q = self.qdisc.borrow_mut();
-                            q.update_rtt(self.flow_state.rtt_estimate).unwrap_or_else(|_| ());
-                            q.update_send_rate(self.flow_state.send_rate as u64);
+                        let fs = self.flow_state.clone();
+                        self.epoch_map.insert(mi.id, fs);
+
+                        if mi.late {
+                            let mut prev_id = mi.id - 1;
+                            while self.epoch_map.get(&prev_id).is_none() {
+                                prev_id -= 1;
+                            }
+                            if let Some(old_fs) = self.epoch_map.get_mut(&prev_id) {
+                                old_fs.update_measurements(now, mi, msg, &self.log);
+                                //debug!(self.log, "out-of-order measurements";
+                                //    "now" => now,
+                                //    "hash" => h,
+                                //    "id" => mi.id,
+                                //    "prev_id" => prev_id,
+                                //    "rtt" => old_fs.rtt_estimate / 1_000,
+                                //    "rate_outgoing" => old_fs.send_rate as u64,
+                                //    "rate_incoming" => old_fs.recv_rate as u64,
+                                //);
+                            } else {
+                                debug!(self.log, "boo");
+                            }
+                        } else {
+
+                            let prev_id = self.flow_state.last_id;
+                            self.flow_state.update_measurements(now, mi, msg, &self.log);
+                            self.conn.did_invoke(&self.flow_state);
+                            {
+                                let mut q = self.qdisc.borrow_mut();
+                                q.update_rtt(self.flow_state.rtt_estimate).unwrap_or_else(|_| ());
+                                q.update_send_rate(self.flow_state.send_rate as u64);
+                            }
+
+                            debug!(self.log, "normal measurements";
+                                "now" => now,
+                                "hash" => h,
+                                "id" => mi.id,
+                                "prev_id" => prev_id,
+                                "rtt" => self.flow_state.rtt_estimate / 1_000,
+                                "rate_outgoing" => self.flow_state.send_rate as u64,
+                                "rate_incoming" => self.flow_state.recv_rate as u64,
+                            );
+                            self.ready_to_invoke = true;
+
                         }
 
-                        debug!(self.log, "new measurements";
-                            "now" => now,
-                            "hash" => h,
-                            "rtt" => self.flow_state.rtt_estimate / 1_000,
-                            "rate_outgoing" => self.flow_state.send_rate as u64,
-                            "rate_incoming" => self.flow_state.recv_rate as u64,
-                        );
 
-                        self.ready_to_invoke = true;
                     } else {
                         debug!(self.log, "no match";
                             "hash" => msg.marked_packet_hash,
@@ -284,9 +322,7 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
             },
             recv(self.invoke_ticker) -> _ => {
                 if self.ready_to_invoke {
-                    let conn = self.flow_state.conn.as_mut().unwrap();
-
-                    let prims = conn.primitives(&self.datapath);
+                    let prims = self.conn.primitives(&self.datapath);
                     info!(self.log, "CCP Invoke";
                           "rtt" => prims.0.rtt_sample_us,
                           "rate_outgoing" => prims.0.rate_outgoing,
@@ -296,10 +332,11 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                     );
 
                     // ccp_invoke
-                    conn.invoke().unwrap_or_else(|_| ());
+                    self.conn.invoke().unwrap_or_else(|_| ());
 
                     // reset measurements
                     self.flow_state.did_invoke();
+                    self.conn.did_invoke(&self.flow_state);
 
                     // after ccp_invoke, qdisc might have changed epoch_length
                     // due to new rate being set.
