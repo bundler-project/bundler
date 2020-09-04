@@ -71,7 +71,7 @@
 
   It is easy to increase these values, but not in flight.  */
 
-#define SFQ_MAX_DEPTH    127 /* max number of packets per flow */
+#define SFQ_MAX_DEPTH    1023 /* max number of packets per flow */
 #define SFQ_DEFAULT_FLOWS  128
 #define SFQ_MAX_FLOWS    (0x10000 - SFQ_MAX_DEPTH - 1) /* max number of flows */
 #define SFQ_EMPTY_SLOT    0xffff

@@ -945,7 +945,7 @@ static int __init tbf_module_init(void)
 #elif QTYPE == FQ_CODEL
 	pr_info("[sch_bundle_inbox] fq_codel\n");
 #elif QTYPE == SFQ
-	pr_info("[sch_bundle_inbox] sfq\n");
+	pr_info("[sch_bundle_inbox] sfq 1023\n");
 #elif QTYPE == PRIO
 	pr_info("[sch_bundle_inbox] prio\n");
 #endif
