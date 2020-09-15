@@ -54,12 +54,9 @@ impl OutBoxFeedbackMsg {
     }
 }
 
-pub const QDISC_FEEDBACK_MSG_TYPE: u32 = 1;
-
 /// Netlink feedback from in-box qdisc.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QDiscFeedbackMsg {
-    pub msg_type: u32,
     pub bundle_id: u32,
     pub marked_packet_hash: u32,
     pub curr_qlen: u32,
@@ -69,29 +66,27 @@ pub struct QDiscFeedbackMsg {
 
 impl QDiscFeedbackMsg {
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; 4 * 4 + 2 * 8]; // 32 bytes
-        LittleEndian::write_u32(&mut buf[0..4], self.msg_type);
-        LittleEndian::write_u32(&mut buf[4..8], self.bundle_id);
-        LittleEndian::write_u32(&mut buf[8..12], self.marked_packet_hash);
-        LittleEndian::write_u32(&mut buf[12..16], self.curr_qlen);
-        LittleEndian::write_u64(&mut buf[16..24], self.epoch_bytes);
-        LittleEndian::write_u64(&mut buf[24..32], self.epoch_time);
+        let mut buf = vec![0u8; 3 * 4 + 2 * 8]; // 28 bytes
+        LittleEndian::write_u32(&mut buf[0..4], self.bundle_id);
+        LittleEndian::write_u32(&mut buf[4..8], self.marked_packet_hash);
+        LittleEndian::write_u32(&mut buf[8..12], self.curr_qlen);
+        LittleEndian::write_u64(&mut buf[12..20], self.epoch_bytes);
+        LittleEndian::write_u64(&mut buf[20..28], self.epoch_time);
         buf
     }
 
     pub fn from_slice(buf: &[u8]) -> Self {
         QDiscFeedbackMsg {
-            msg_type: LittleEndian::read_u32(&buf[0..4]),
-            bundle_id: LittleEndian::read_u32(&buf[4..8]),
-            marked_packet_hash: LittleEndian::read_u32(&buf[8..12]),
-            curr_qlen: LittleEndian::read_u32(&buf[12..16]),
-            epoch_bytes: LittleEndian::read_u64(&buf[16..24]),
-            epoch_time: LittleEndian::read_u64(&buf[24..32]),
+            bundle_id: LittleEndian::read_u32(&buf[0..4]),
+            marked_packet_hash: LittleEndian::read_u32(&buf[4..8]),
+            curr_qlen: LittleEndian::read_u32(&buf[8..12]),
+            epoch_bytes: LittleEndian::read_u64(&buf[12..20]),
+            epoch_time: LittleEndian::read_u64(&buf[20..28]),
         }
     }
 }
 
-pub const UPDATE_QDISC_MSG_TYPE: u32 = 2;
+pub const QDISC_UPDATE_MSG_TYPE: u32 = 1;
 
 /// Netlink message requesting the qdisc to change the rate at which it samples packets for a given
 /// bundle.
@@ -120,7 +115,7 @@ impl QDiscUpdateMsg {
         }
     }
 }
-pub const UPDATE_PRIO_MSG_TYPE: u32 = 3;
+pub const UPDATE_PRIO_MSG_TYPE: u32 = 2;
 
 /// Netlink message requesting the qdisc to set the priority of the given flow_id to the given
 /// flow_prio.
@@ -152,7 +147,7 @@ impl UpdatePrioMsg {
     }
 }
 
-pub const QDISC_PRIO_MSG_TYPE: u32 = 4;
+pub const QDISC_PRIO_MSG_TYPE: u32 = 2;
 
 /// Netlink message describing a new flow that a priority can be set for.
 #[derive(Clone, Debug, PartialEq)]

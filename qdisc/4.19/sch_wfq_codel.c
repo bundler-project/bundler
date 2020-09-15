@@ -75,23 +75,6 @@ struct fq_codel_sched_data {
   struct list_head old_flows;  /* list of old flows */
 };
 
-/* Define BUNDLER_SET_FLOW_PRIO macro so sch_bundler knows to call the priority-setting function.
- * If it is already defined, some other piority qdisc is in use, so don't create a clash.
- * Yes this is hacky, but this way we don't need to change the qdisc api.
- */
-#ifndef BUNDLER_SET_FLOW_PRIO
-#define BUNDLER_SET_FLOW_PRIO
-static int bundler_update_flow_weight(struct Qdisc *sch, unsigned int idx, u16 weight) {
-  struct fq_codel_sched_data *q = qdisc_priv(sch);
-  if (idx < q->flows_cnt) {
-    q->flows[idx].weight = weight;
-    return 0;
-  } else {
-    return -1;
-  }
-}
-#endif
-
 static unsigned int fq_codel_hash(const struct fq_codel_sched_data *q,
           struct sk_buff *skb)
 {
@@ -223,9 +206,6 @@ static int fq_codel_enqueue(struct sk_buff *skb, struct Qdisc *sch,
     return ret;
   }
   idx--;
-
-  // akshay
-  maybe_report_flow(skb, idx);
 
   // set metadata
   codel_set_enqueue_time(skb);
