@@ -1,6 +1,6 @@
 use bundler::{IP_HEADER_LENGTH, MAC_HEADER_LENGTH};
 use minion::Cancellable;
-use slog::{debug, info, o, Drain};
+use slog::{info, debug, o, Drain};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -89,7 +89,7 @@ fn main() {
 struct InboxCapturePlayer {
     log: slog::Logger,
     cap: pcap::Capture<pcap::Offline>,
-    qdisc_match_tx: crossbeam::Sender<bundler::serialize::QDiscRecvMsgs>,
+    qdisc_match_tx: crossbeam::Sender<bundler::serialize::QDiscFeedbackMsg>,
     qdisc_ctl_rx: mpsc::Receiver<u32>,
     bytes_recv: u64,
     epoch_sample_rate: u32,
@@ -104,7 +104,10 @@ impl InboxCapturePlayer {
         cap: pcap::Capture<pcap::Offline>,
         qdisc_ctl_rx: mpsc::Receiver<u32>,
         with_ethernet: bool,
-    ) -> (Self, crossbeam::Receiver<bundler::serialize::QDiscRecvMsgs>) {
+    ) -> (
+        Self,
+        crossbeam::Receiver<bundler::serialize::QDiscFeedbackMsg>,
+    ) {
         let ip_header_start = if !with_ethernet { 0 } else { MAC_HEADER_LENGTH };
         let tcp_header_start = ip_header_start + IP_HEADER_LENGTH;
         let (tx, rx) = crossbeam::bounded(0);
@@ -165,9 +168,7 @@ impl minion::Cancellable for InboxCapturePlayer {
                         epoch_time: now,
                     };
 
-                    self.qdisc_match_tx
-                        .send(bundler::serialize::QDiscRecvMsgs::BundleFeedback(msg))
-                        .unwrap();
+                    self.qdisc_match_tx.send(msg).unwrap();
                 }
 
                 Ok(minion::LoopState::Continue)
@@ -251,7 +252,7 @@ fn start_outbox<T: pcap::Activated + Send + 'static>(
 
 fn new_inbox_runtime(
     log: slog::Logger,
-    qdisc_recv: crossbeam::Receiver<bundler::serialize::QDiscRecvMsgs>,
+    qdisc_recv: crossbeam::Receiver<bundler::serialize::QDiscFeedbackMsg>,
     outbox_recv: crossbeam::Receiver<bundler::serialize::OutBoxFeedbackMsg>,
     outbox_report: mpsc::Sender<bundler::serialize::OutBoxReportMsg>,
     qdisc_ctl: mpsc::Sender<u32>,
