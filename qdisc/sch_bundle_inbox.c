@@ -48,7 +48,7 @@
  #elif QTYPE == PRIO
  #include "4.15/sch_prio.c"
  #endif
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,16,0) && LINUX_VERSION_CODE < KERNEL_VERSION(5,4,0)
  #if QTYPE == FIFO
  #elif QTYPE == WFQ_CODEL
  #include "4.19/sch_wfq_codel.c"
@@ -58,6 +58,15 @@
  #include "4.19/sch_sfq.c"
  #elif QTYPE == PRIO
  #include "4.19/sch_prio.c"
+ #endif
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5,4,0)
+ #if QTYPE == FIFO
+ #elif QTYPE == FQ_CODEL
+ #include "5.4/sch_fq_codel.c"
+ #elif QTYPE == SFQ
+ #include "5.4/sch_sfq.c"
+ #elif QTYPE == PRIO
+ #include "5.4/sch_prio.c"
  #endif
 #else 
 #pragma message "kernel version unsupported"
@@ -279,7 +288,13 @@ static int tbf_segment(struct sk_buff *skb, struct Qdisc *sch,
 static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
            struct sk_buff **to_free)
 {
+#ifdef __VERBOSE__LOGGING__
+    pr_info("[sch_bundle_inbox] enqueue");
+#endif
   struct tbf_sched_data *q = qdisc_priv(sch);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,20,0)
+  unsigned int len = qdisc_pkt_len(skb);
+#endif
   int ret;
 
   if (qdisc_pkt_len(skb) > q->max_size) {
@@ -306,7 +321,11 @@ static int tbf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
     return ret;
   }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,20,0)
+  sch->qstats.backlog += len;
+#else
   qdisc_qstats_backlog_inc(sch, skb);
+#endif
   sch->q.qlen++;
 #ifdef __VERBOSE_LOGGING__
 #if QTYPE != PRIO
@@ -364,10 +383,14 @@ static uint32_t hash_header(unsigned char *dst_ip, unsigned char *ports, unsigne
 
 static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
 {
+#ifdef __VERBOSE__LOGGING__
+    pr_info("[sch_bundle_inbox] dequeue");
+#endif
   struct tbf_sched_data *q = qdisc_priv(sch);
   struct sk_buff *skb;
   struct iphdr *ip_header;
   unsigned char *transport_header; 
+  struct tcphdr *tcp_header;
   uint32_t hash;
 
   skb = q->qdisc->ops->peek(q->qdisc);
@@ -397,8 +420,8 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       if (unlikely(!skb))
         return NULL;
 
-			q->epoch_bytes_sent += len;
-			q->epoch_pkts_sent += skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
+      q->epoch_bytes_sent += len;
+      q->epoch_pkts_sent += skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
 
       transport_header = skb_transport_header(skb);
       if (transport_header) { 
@@ -585,7 +608,11 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
   s64 buffer, mtu;
   u64 rate64 = 0, prate64 = 0;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,2,0)
+  err = nla_parse_nested_deprecated(tb, TCA_TBF_MAX, opt, tbf_policy, NULL);
+#else
   err = nla_parse_nested(tb, TCA_TBF_MAX, opt, tbf_policy, NULL);
+#endif
   if (err < 0)
     return err;
 
@@ -679,7 +706,11 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
   if (child) {
     qdisc_tree_reduce_backlog(q->qdisc, q->qdisc->q.qlen,
             q->qdisc->qstats.backlog);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,20,0)
+    qdisc_put(q->qdisc);
+#else
     qdisc_destroy(q->qdisc);
+#endif
     q->qdisc = child;
   }
   q->limit = qopt->limit;
@@ -724,8 +755,8 @@ void tbf_nl_recv_msg(struct sk_buff *skb) {
 
     memcpy(&msg, nlmsg_data(nlh), sizeof(struct QDiscUpdateMsg));
     if (msg.sample_rate != 0) {
-        pr_info("[sch_bundle_inbox] epoch_len %u\n", msg.sample_rate);
         sch_bundle_inbox_q->epoch_sample_rate = msg.sample_rate;
+        pr_info("[sch_bundle_inbox] epoch_len %u\n", msg.sample_rate);
     }
     return;
 }
@@ -757,7 +788,7 @@ static int tbf_init(struct Qdisc *sch, struct nlattr *opt,
 
 	q->nl_sock = netlink_kernel_create(&init_net, NETLINK_USERSOCK, &cfg);
 	if (!q->nl_sock) {
-		printk(KERN_INFO "bundle_inbox_init: error creating netlink socket\n");
+		printk(KERN_INFO "[sch_bundle_inbox] init: error creating netlink socket\n");
 		return -EINVAL;
 	}
 
@@ -777,7 +808,11 @@ static void tbf_destroy(struct Qdisc *sch)
     q->nl_sock = NULL;
   }
   qdisc_watchdog_cancel(&q->watchdog);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,20,0)
+  qdisc_put(q->qdisc);
+#else
   qdisc_destroy(q->qdisc);
+#endif
 }
 
 static int tbf_dump(struct Qdisc *sch, struct sk_buff *skb)
@@ -901,20 +936,18 @@ static int __init tbf_module_init(void)
 {
     int ok = register_qdisc(&tbf_qdisc_ops);
     if (ok < 0) {
-        pr_info("bundle_inbox: register_qdisc failed: %d\n", ok);
+        pr_info("[sch_bundle_inbox] register_qdisc failed: %d\n", ok);
         return ok;
     }
 
 #if QTYPE == FIFO
-	pr_info("bundle_inbox: fifo\n");
+	pr_info("[sch_bundle_inbox] fifo\n");
 #elif QTYPE == FQ_CODEL
-	pr_info("bundle_inbox: fq_codel\n");
-#elif QTYPE == WFQ_CODEL
-	pr_info("bundle_inbox: wfq_codel\n");
+	pr_info("[sch_bundle_inbox] fq_codel\n");
 #elif QTYPE == SFQ
-	pr_info("bundle_inbox: sfq\n");
+	pr_info("[sch_bundle_inbox] sfq\n");
 #elif QTYPE == PRIO
-	pr_info("bundle_inbox: prio\n");
+	pr_info("[sch_bundle_inbox] prio\n");
 #endif
 
 #ifdef __VERBOSE_LOGGING__
@@ -926,7 +959,7 @@ static int __init tbf_module_init(void)
 
 static void __exit tbf_module_exit(void)
 {
-  printk(KERN_INFO "bundle_inbox: exit\n");
+  printk(KERN_INFO "[sch_bundle_inbox] exit\n");
   unregister_qdisc(&tbf_qdisc_ops);
 }
 module_init(tbf_module_init)
