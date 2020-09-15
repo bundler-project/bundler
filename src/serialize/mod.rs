@@ -106,7 +106,7 @@ pub struct QDiscUpdateMsg {
 impl QDiscUpdateMsg {
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut buf = vec![0u8; 3 * 4]; // 12 bytes
-        LittleEndian::write_u32(&mut buf[0..4], UPDATE_QDISC_MSG_TYPE);
+        LittleEndian::write_u32(&mut buf[0..4], QDISC_UPDATE_MSG_TYPE);
         LittleEndian::write_u32(&mut buf[4..8], self.bundle_id);
         LittleEndian::write_u32(&mut buf[8..12], self.sample_rate);
         buf
@@ -114,7 +114,7 @@ impl QDiscUpdateMsg {
 
     pub fn from_slice(buf: &[u8]) -> Self {
         QDiscUpdateMsg {
-            msg_type: UPDATE_QDISC_MSG_TYPE,
+            msg_type: QDISC_UPDATE_MSG_TYPE,
             bundle_id: LittleEndian::read_u32(&buf[4..8]),
             sample_rate: LittleEndian::read_u32(&buf[8..12]),
         }
@@ -129,7 +129,7 @@ pub struct UpdatePrioMsg {
     pub msg_type: u32,
     pub bundle_id: u32,
     pub flow_id: u32,
-    pub flow_prio: u16,
+    pub flow_prio: u32,
 }
 
 impl UpdatePrioMsg {
@@ -138,7 +138,7 @@ impl UpdatePrioMsg {
         LittleEndian::write_u32(&mut buf[0..4], UPDATE_PRIO_MSG_TYPE);
         LittleEndian::write_u32(&mut buf[4..8], self.bundle_id);
         LittleEndian::write_u32(&mut buf[8..12], self.flow_id);
-        LittleEndian::write_u16(&mut buf[12..14], self.flow_prio);
+        LittleEndian::write_u32(&mut buf[12..16], self.flow_prio);
         buf
     }
 
@@ -147,7 +147,7 @@ impl UpdatePrioMsg {
             msg_type: UPDATE_PRIO_MSG_TYPE,
             bundle_id: LittleEndian::read_u32(&buf[4..8]),
             flow_id: LittleEndian::read_u32(&buf[8..12]),
-            flow_prio: LittleEndian::read_u16(&buf[12..14]),
+            flow_prio: LittleEndian::read_u32(&buf[12..16]),
         }
     }
 }
@@ -218,7 +218,6 @@ mod tests {
     #[test]
     fn check_qdisc_msg() {
         let m = QDiscFeedbackMsg {
-            msg_type: super::QDISC_FEEDBACK_MSG_TYPE,
             bundle_id: 3,
             marked_packet_hash: 0x3fff_ffff,
             curr_qlen: 24,
@@ -234,7 +233,7 @@ mod tests {
     #[test]
     fn check_update_msg() {
         let m = QDiscUpdateMsg {
-            msg_type: super::UPDATE_QDISC_MSG_TYPE,
+            msg_type: super::QDISC_UPDATE_MSG_TYPE,
             bundle_id: 4,
             sample_rate: 128,
         };

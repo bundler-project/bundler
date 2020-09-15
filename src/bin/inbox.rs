@@ -5,7 +5,8 @@ extern crate minion;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-use slog::{error, info, trace, warn};
+#[cfg(target_os = "linux")]
+use slog::{error, info, warn};
 
 #[cfg(target_os = "linux")]
 use regex::Regex;
@@ -268,34 +269,6 @@ fn setup_qdisc(
     }
 }
 
-struct Prio {
-    port: Option<u16>,
-    log: slog::Logger,
-}
-
-impl bundler::prio::Prioritizer for Prio {
-    fn assign_priority(&mut self, flow: bundler::prio::FlowInfo) -> u16 {
-        trace!(self.log, "Flow Priority"; "src_ip" => flow.src_ip, "src_port" => flow.src_port, "dst_ip" => flow.dst_ip, "dst_port" => flow.dst_port);
-
-        if let Some(p) = self.port {
-            if flow.dst_port == p {
-                2
-            } else {
-                1
-            }
-        } else {
-            1
-        }
-    }
-}
-
-fn setup_prioritizer(log: &slog::Logger, port: Option<u16>) -> Prio {
-    Prio {
-        port,
-        log: log.clone(),
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn main() {
     use clap::{value_t, App, Arg};
@@ -371,12 +344,6 @@ fn main() {
                 .required(false)
         )
         .arg(
-            Arg::with_name("prio_port")
-                .long("prio_port")
-                .takes_value(true)
-                .required(false)
-        )
-        .arg(
             Arg::with_name("sip")
                 .long("sip")
                 .takes_value(true)
@@ -394,20 +361,17 @@ fn main() {
         .parse::<bool>()
         .unwrap();
     let outbox = matches.value_of("outbox").map(String::from);
-    let port = value_t!(matches.value_of("prio_port"), u16).ok();
 
     let log = portus::algs::make_logger();
 
     let verbose = matches.is_present("verbose");
 
     let (handle_major, handle_minor) = setup_qdisc(&log, &iface, listen_port, verbose, matches);
-    let prio = setup_prioritizer(&log, port);
 
     use bundler::inbox::Runtime;
     use minion::Cancellable;
     let mut r = Runtime::new(
         log,
-        Some(prio),
         listen_port,
         outbox,
         iface,

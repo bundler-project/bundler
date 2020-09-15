@@ -89,7 +89,7 @@ impl Datapath for Qdisc {
         }
 
         let msg = QDiscUpdateMsg {
-            msg_type: crate::serialize::UPDATE_QDISC_MSG_TYPE,
+            msg_type: crate::serialize::QDISC_UPDATE_MSG_TYPE,
             bundle_id: 42,
             sample_rate: epoch_length_packets,
         };
@@ -104,17 +104,6 @@ impl Datapath for Qdisc {
             self.min_rtt_ns as f64 / 1e9,
         );
         self.set_epoch_length(epoch_length).unwrap_or_else(|_| ());
-    }
-
-    fn update_flow_prio(&mut self, flow_id: u32, flow_prio: u16) -> Result<(), portus::Error> {
-        let resp = serialize::UpdatePrioMsg {
-            msg_type: serialize::UPDATE_PRIO_MSG_TYPE,
-            bundle_id: 42,
-            flow_id,
-            flow_prio,
-        };
-
-        self.update_sock.send(&resp.as_bytes())
     }
 
     fn get_curr_epoch_length(&self) -> u32 {

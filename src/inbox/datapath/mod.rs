@@ -12,7 +12,6 @@ pub trait Datapath {
     fn update_rtt(&mut self, rtt_ns: u64) -> Result<(), ()>;
     fn set_epoch_length(&mut self, epoch_length_packets: u32) -> Result<(), portus::Error>;
     fn update_send_rate(&mut self, observed_sending_bytes_per_sec: u64);
-    fn update_flow_prio(&mut self, flow_id: u32, flow_prio: u16) -> Result<(), portus::Error>;
     fn get_curr_epoch_length(&self) -> u32;
 }
 
