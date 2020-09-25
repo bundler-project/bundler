@@ -168,33 +168,31 @@ impl BundleFlowState {
         let bdp_estimate_bytes = send_rate as f64 * rtt_s;
         let delta = send_epoch_bytes.saturating_sub(recv_epoch_bytes);
 
-        if !sent_mark.late {
-            self.send_rate = send_rate;
-            self.recv_rate = recv_rate;
+        self.send_rate = send_rate;
+        self.recv_rate = recv_rate;
 
-            self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
-            self.acked_bytes = recv_epoch_bytes as u32;
-            self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
+        self.bdp_estimate_packets = (bdp_estimate_bytes / 1514.0) as u32;
+        self.acked_bytes = recv_epoch_bytes as u32;
+        self.lost_bytes = if delta > 0 { delta as u32 } else { 0 };
 
-            self.rtt_estimate = rtt_estimate;
-            // s2 now becomes s1 and r2 becomes r1
-            self.prev_send_time = s2;
-            self.prev_send_byte_clock = s2_bytes;
-            self.prev_recv_time = r2;
-            self.prev_recv_byte_clock = r2_bytes;
+        self.rtt_estimate = rtt_estimate;
+        // s2 now becomes s1 and r2 becomes r1
+        self.prev_send_time = s2;
+        self.prev_send_byte_clock = s2_bytes;
+        self.prev_recv_time = r2;
+        self.prev_recv_byte_clock = r2_bytes;
 
-            self.last_id = sent_mark.id;
-        } else {
-            info!(logger, "ooo measurements";
-                "now" => now,
-                "prev_id" => self.last_id,
-                "id" => sent_mark.id,
-                "hash" => sent_mark.pkt_hash,
-                "rtt" => rtt_estimate / 1_000,
-                "rate_outgoing" => send_rate as u64,
-                "rate_incoming" => recv_rate as u64,
-            );
-        }
+        self.last_id = sent_mark.id;
+
+        info!(logger, "ooo measurements";
+            "now" => now,
+            "prev_id" => self.last_id,
+            "id" => sent_mark.id,
+            "hash" => sent_mark.pkt_hash,
+            "rtt" => rtt_estimate / 1_000,
+            "rate_outgoing" => send_rate as u64,
+            "rate_incoming" => recv_rate as u64,
+        );
     }
 
     pub fn did_invoke(&mut self) {
