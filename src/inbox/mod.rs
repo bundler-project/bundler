@@ -7,7 +7,7 @@
 use self::datapath::qdisc::*;
 
 use self::datapath::Datapath;
-use self::flow_state::BundleFlowState;
+use self::flow_state::{BundleFlowState, LibccpConn};
 use self::readers::UnixMsgReader;
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 use crossbeam::select;
@@ -96,7 +96,8 @@ where
     // Doing so would be unsafe, because the lifetime is
     // declared as 'static when it is actually the same
     // as the lifetime of Arc<libccp::Datapath>.
-    flow_state: BundleFlowState<'static, Q>,
+    flow_state: BundleFlowState,
+    conn: LibccpConn<'static, Q>,
     qdisc: Rc<RefCell<Q>>,
     invoke_ticker: crossbeam::Receiver<Instant>,
     ready_to_invoke: bool,
@@ -211,8 +212,9 @@ impl<Q: Datapath> Runtime<Q> {
         )
         .unwrap();
 
-        let mut fs: BundleFlowState<Q> = Default::default();
-        fs.conn = Some(conn);
+        let conn = LibccpConn::new(conn);
+        let mut fs: BundleFlowState = Default::default();
+
         fs.epoch_history.window = 1;
 
         let invoke_ticker = tick(Duration::from_millis(10));
@@ -223,6 +225,7 @@ impl<Q: Datapath> Runtime<Q> {
             qdisc_recv,
             outbox_recv,
             flow_state: fs,
+            conn,
             qdisc,
             invoke_ticker,
             ready_to_invoke: false,
@@ -284,9 +287,7 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
             },
             recv(self.invoke_ticker) -> _ => {
                 if self.ready_to_invoke {
-                    let conn = self.flow_state.conn.as_mut().unwrap();
-
-                    let prims = conn.primitives(&self.datapath);
+                    let prims = self.conn.primitives(&self.datapath);
                     info!(self.log, "CCP Invoke";
                           "rtt" => prims.0.rtt_sample_us,
                           "rate_outgoing" => prims.0.rate_outgoing,
@@ -296,10 +297,11 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                     );
 
                     // ccp_invoke
-                    conn.invoke().unwrap_or_else(|_| ());
+                    self.conn.invoke().unwrap_or_else(|_| ());
 
                     // reset measurements
                     self.flow_state.did_invoke();
+                    self.conn.did_invoke(&self.flow_state);
 
                     // after ccp_invoke, qdisc might have changed epoch_length
                     // due to new rate being set.

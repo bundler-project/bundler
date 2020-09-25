@@ -5,9 +5,45 @@ use slog::info;
 mod marks;
 use self::marks::{Epoch, EpochHistory, MarkHistory, MarkedInstant};
 
+pub struct LibccpConn<'dp, Q: crate::inbox::datapath::Datapath + 'static>(
+    libccp::Connection<'dp, ConnectionImpl<Q>>,
+);
+
+impl<'dp, Q: crate::inbox::datapath::Datapath> std::ops::Deref for LibccpConn<'dp, Q> {
+    type Target = libccp::Connection<'dp, ConnectionImpl<Q>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<'dp, Q: crate::inbox::datapath::Datapath> std::ops::DerefMut for LibccpConn<'dp, Q> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<'dp, Q: crate::inbox::datapath::Datapath> LibccpConn<'dp, Q> {
+    pub fn new(c: libccp::Connection<'dp, ConnectionImpl<Q>>) -> Self {
+        Self(c)
+    }
+
+    pub fn did_invoke(&mut self, fs: &BundleFlowState) {
+        // set primitives
+        self.0.load_primitives(
+            libccp::Primitives::default()
+                .with_rate_outgoing(fs.send_rate as u64)
+                .with_rate_incoming(fs.recv_rate as u64)
+                .with_rtt_sample_us(fs.rtt_estimate / 1_000)
+                .with_bytes_acked(fs.acked_bytes)
+                .with_packets_acked(fs.acked_bytes / 1514)
+                .with_lost_pkts_sample(fs.lost_bytes / 1514)
+                .with_bytes_pending(fs.curr_qlen), // quick hack
+        );
+    }
+}
+
 /// Calculate and maintain flow measurements.
-pub struct BundleFlowState<'dp, Q: crate::inbox::datapath::Datapath + 'static> {
-    pub conn: Option<libccp::Connection<'dp, ConnectionImpl<Q>>>,
+#[derive(Debug, Clone)]
+pub struct BundleFlowState {
     pub marked_packets: MarkHistory,
     pub epoch_history: EpochHistory,
 
@@ -27,10 +63,9 @@ pub struct BundleFlowState<'dp, Q: crate::inbox::datapath::Datapath + 'static> {
     pub curr_qlen: u32,
 }
 
-impl<'dp, Q: crate::inbox::datapath::Datapath> Default for BundleFlowState<'dp, Q> {
+impl Default for BundleFlowState {
     fn default() -> Self {
         BundleFlowState {
-            conn: None,
             marked_packets: Default::default(),
             epoch_history: Default::default(),
             prev_send_time: Default::default(),
@@ -44,11 +79,24 @@ impl<'dp, Q: crate::inbox::datapath::Datapath> Default for BundleFlowState<'dp, 
             acked_bytes: Default::default(),
             lost_bytes: Default::default(),
             curr_qlen: Default::default(),
+            last_id: Default::default(),
         }
     }
 }
 
-impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
+impl BundleFlowState {
+    //pub fn new_measurements(
+    //    self,
+    //    now: u64,
+    //    sent_mark: MarkedInstant,
+    //    recv_mark: OutBoxFeedbackMsg,
+    //    logger: &slog::Logger,
+    //) -> Self {
+    //    let mut new = self.clone();
+    //    new.update_measurements(now, sent_mark, recv_mark, logger);
+    //    new
+    //}
+
     ///
     /// s1  |\   A       |
     ///     | -------    |
@@ -141,22 +189,5 @@ impl<'dp, Q: crate::inbox::datapath::Datapath> BundleFlowState<'dp, Q> {
     pub fn did_invoke(&mut self) {
         self.acked_bytes = 0;
         self.lost_bytes = 0;
-        self.update_primitives()
-    }
-
-    fn update_primitives(&mut self) {
-        // set primitives
-        if let Some(c) = self.conn.as_mut() {
-            c.load_primitives(
-                libccp::Primitives::default()
-                    .with_rate_outgoing(self.send_rate as u64)
-                    .with_rate_incoming(self.recv_rate as u64)
-                    .with_rtt_sample_us(self.rtt_estimate / 1_000)
-                    .with_bytes_acked(self.acked_bytes)
-                    .with_packets_acked(self.acked_bytes / 1514)
-                    .with_lost_pkts_sample(self.lost_bytes / 1514)
-                    .with_bytes_pending(self.curr_qlen), // quick hack
-            );
-        }
     }
 }
