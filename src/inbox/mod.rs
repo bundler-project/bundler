@@ -12,7 +12,7 @@ use self::readers::UnixMsgReader;
 use crate::serialize::{OutBoxFeedbackMsg, QDiscFeedbackMsg};
 use crossbeam::select;
 use minion::Cancellable;
-use slog::{debug, info};
+use slog::{debug, info, trace};
 use std::os::unix::net::UnixDatagram;
 
 #[cfg(target_os = "linux")]
@@ -318,7 +318,7 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
             recv(self.invoke_ticker) -> _ => {
                 if self.ready_to_invoke {
                     let prims = self.conn.primitives(&self.datapath);
-                    info!(self.log, "CCP Invoke";
+                    trace!(self.log, "CCP Invoke";
                           "rtt" => prims.0.rtt_sample_us,
                           "rate_outgoing" => prims.0.rate_outgoing,
                           "rate_incoming" => prims.0.rate_incoming,

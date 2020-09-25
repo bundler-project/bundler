@@ -5,7 +5,7 @@ use portus::ipc;
 use portus::ipc::netlink;
 use portus::ipc::Ipc;
 use slog;
-use slog::{trace, debug, info};
+use slog::{debug, info, trace};
 use std::cmp::min;
 
 use super::get_epoch_length;
@@ -43,13 +43,13 @@ impl Datapath for Qdisc {
             return Err(());
         }
 
-        debug!(self.logger, "set cwnd"; "cwnd_pkts" => cwnd_bytes / 1500);
+        trace!(self.logger, "set cwnd"; "cwnd_pkts" => cwnd_bytes / 1500);
         self.cwnd_bytes = cwnd_bytes;
         self.__set_rate()
     }
 
     fn set_rate(&mut self, rate: u32) -> Result<(), ()> {
-        debug!(self.logger, "set rate"; "rate" => rate);
+        trace!(self.logger, "set rate"; "rate" => rate);
         self.rate_bytes_per_sec = rate;
         self.__set_rate()
     }
