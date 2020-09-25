@@ -1,5 +1,5 @@
 //! A Bundler CCP datapath.
-
+#![feature(deque_range)]
 extern crate bytes;
 extern crate crossbeam;
 extern crate failure;
