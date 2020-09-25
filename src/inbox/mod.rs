@@ -276,17 +276,13 @@ impl<Q: Datapath> minion::Cancellable for Runtime<Q> {
                             }
                             if let Some(old_fs) = self.epoch_map.get_mut(&prev_id) {
                                 old_fs.update_measurements(now, mi, msg, &self.log);
-                                //debug!(self.log, "out-of-order measurements";
-                                //    "now" => now,
-                                //    "hash" => h,
-                                //    "id" => mi.id,
-                                //    "prev_id" => prev_id,
-                                //    "rtt" => old_fs.rtt_estimate / 1_000,
-                                //    "rate_outgoing" => old_fs.send_rate as u64,
-                                //    "rate_incoming" => old_fs.recv_rate as u64,
-                                //);
                             } else {
-                                debug!(self.log, "boo");
+                                debug!(self.log, "id not found in epoch_map";
+                                       "now" => now,
+                                       "hash" => h,
+                                       "id" => mi.id,
+                                       "prev_id" => prev_id,
+                                );
                             }
                         } else {
 

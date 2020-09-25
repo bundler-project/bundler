@@ -186,9 +186,9 @@ impl BundleFlowState {
 
         info!(logger, "ooo measurements";
             "now" => now,
-            "prev_id" => self.last_id,
-            "id" => sent_mark.id,
             "hash" => sent_mark.pkt_hash,
+            "id" => sent_mark.id,
+            "prev_id" => self.last_id,
             "rtt" => rtt_estimate / 1_000,
             "rate_outgoing" => send_rate as u64,
             "rate_incoming" => recv_rate as u64,
