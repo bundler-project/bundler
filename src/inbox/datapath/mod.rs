@@ -3,7 +3,7 @@ pub fn get_epoch_length(rate_bytes: f64, rtt_sec: f64) -> u32 {
     // round to power of 2
     let inflight_bdp_rounded = crate::round_down_power_of_2(inflight_bdp as u32);
 
-    std::cmp::max(inflight_bdp_rounded >> 2, 4)
+    std::cmp::min(std::cmp::max(inflight_bdp_rounded >> 2, 4), 1024)
 }
 
 pub trait Datapath {
