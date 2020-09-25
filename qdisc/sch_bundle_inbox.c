@@ -214,7 +214,7 @@ void send_to_dp(struct tbf_sched_data *q, char *msg, int msg_size) {
 		GFP_NOWAIT
 	);
 	if (res < 0) {
-		//printk(KERN_ERR "bundle_inbox_err: failed to send netlink message %d\n", res);
+		printk(KERN_ERR "bundle_inbox_err: failed to send netlink message %d\n", res);
 	}
 }
 
@@ -362,21 +362,16 @@ fnv_64_buf(void *buf, size_t len, Fnv64_t hval)
     return hval;
 }
 
-// Pseudo-header for packet hashing:
-//    0                   1                   2                   3
-//    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   |           Destination Address (ipv4 header bytes 4-6)         |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   | Destination Port (tcp[2:4])   |  Identification (ipv4[4:6])   |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-static uint32_t hash_header(unsigned char *dst_ip, unsigned char *ports, unsigned char *ipid) {
+/*
+static uint32_t hash_packet(void *buf, size_t buflength) {
+    return (uint32_t) fnv_64_buf(buf, buflength, FNV1_64_INIT);
+}
+*/
+
+static uint32_t hash_header(void *ips, void *ports, void *ipid) {
   uint32_t hash = 0;
-  //hash = fnv_64_buf(dst_ip, 4, FNV1_64_INIT);
-  // only dst port
-  hash = fnv_64_buf((void*) (ports+2), 2, FNV1_64_INIT);
-  // src and dst port
-  //hash = fnv_64_buf((void*) (ports), 4, FNV1_64_INIT);
+  //hash = fnv_64_buf(ips, 8, FNV1_64_INIT);
+  hash = fnv_64_buf(ports, 2, FNV1_64_INIT);
   hash = fnv_64_buf(ipid, 2, hash);
   return hash;
 }
@@ -389,7 +384,6 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
   struct tbf_sched_data *q = qdisc_priv(sch);
   struct sk_buff *skb;
   struct iphdr *ip_header;
-  unsigned char *transport_header; 
   struct tcphdr *tcp_header;
   uint32_t hash;
 
@@ -423,10 +417,11 @@ static struct sk_buff *tbf_dequeue(struct Qdisc *sch)
       q->epoch_bytes_sent += len;
       q->epoch_pkts_sent += skb_is_gso(skb) ? skb_shinfo(skb)->gso_segs : 1;
 
-      transport_header = skb_transport_header(skb);
-      if (transport_header) { 
+      tcp_header = (struct tcphdr *)skb_transport_header(skb);
+      if (tcp_header) { 
+          // uint32_t hash = hash_packet(&hdr->seq, sizeof(u32));
           ip_header = (struct iphdr *)skb_network_header(skb);
-          hash = hash_header((unsigned char*) &(ip_header->daddr), transport_header, (unsigned char*) &(ip_header->id));
+          hash = hash_header(&(ip_header->saddr), tcp_header, &(ip_header->id));
           if (hash % q->epoch_sample_rate == 0) {
               struct FeedbackMsg fmsg = {
                   .bundle_id = 42,
@@ -729,7 +724,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt,
   memcpy(&q->rate, &rate, sizeof(struct psched_ratecfg));
   memcpy(&q->peak, &peak, sizeof(struct psched_ratecfg));
 
-  //pr_info("[sch_bundle_inbox] rate %llu\n", *((u64*) &rate));
+  pr_info("[sch_bundle_inbox] rate %llu\n", *((u64*) &rate));
 
   sch_tree_unlock(sch);
   err = 0;
