@@ -94,6 +94,15 @@ fn main() {
 
     let (tx, rx) = crossbeam::unbounded::<(u64, u32, u64)>();
     let log = portus::algs::make_logger();
+
+    let out = std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("--short")
+        .arg("HEAD")
+        .output();
+    let commit = String::from_utf8(out.unwrap().stdout);
+    slog::info!(&log, "bundler commit"; "commit" => ?commit);
+
     let feedback_log = log.clone();
     let recv_log = log.clone();
 
@@ -134,15 +143,8 @@ fn main() {
 
     slog::info!(&log, "starting outbox");
 
-    bundler::outbox::start_outbox(
-        cap,
-        tx,
-        r,
-        sample_rate,
-        no_ethernet,
-        log,
-    )
-    .expect("outbox returned error");
+    bundler::outbox::start_outbox(cap, tx, r, sample_rate, no_ethernet, log)
+        .expect("outbox returned error");
 }
 
 #[cfg(not(target_os = "linux"))]

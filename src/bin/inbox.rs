@@ -362,7 +362,15 @@ fn main() {
         .unwrap();
     let outbox = matches.value_of("outbox").map(String::from);
 
+    let out = std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("--short")
+        .arg("HEAD")
+        .output();
+    let commit = String::from_utf8(out.unwrap().stdout);
+
     let log = portus::algs::make_logger();
+    slog::info!(&log, "bundler commit"; "commit" => ?commit);
 
     let verbose = matches.is_present("verbose");
 
